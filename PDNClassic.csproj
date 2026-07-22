@@ -1,0 +1,94 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Set this to the location where you have Paint.NET installed. If you have the Microsoft
+         Store version, you should download the portable version and point this at that. -->
+    <PdnRoot>C:\Program Files\paint.net</PdnRoot>
+  </PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>PDNClassic</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>    
+    <!-- This is necessary so that the build copies the version of nuget packages we're referencing,
+         instead of copying the ones that Paint.NET is using (which may be trimmed and/or a different version) -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <ProduceReferenceAssembly>False</ProduceReferenceAssembly>
+    <Deterministic>False</Deterministic>
+    <AssemblyVersion>5.1.*</AssemblyVersion>
+  </PropertyGroup>
+  <PropertyGroup>
+    <!-- MSB3277 removes the harmless and unhelpful warning about assembly version "conflicts" (e.g. System.Runtime.Serialization.Formatters) -->
+    <NoWarn>1701;1702;CS7035;MSB3277</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ILRepack" Version="2.0.45">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Be sure to set Private=False (aka CopyLocal=false) on the Paint.NET assemblies 
+         so they are not copied to the output folder -->
+    <Reference Include="PaintDotNet.Base">
+      <HintPath>$(PdnRoot)\PaintDotNet.Base.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.ComponentModel">
+      <HintPath>$(PdnRoot)\PaintDotNet.ComponentModel.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Core">
+      <HintPath>$(PdnRoot)\PaintDotNet.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Effects.Core">
+      <HintPath>$(PdnRoot)\PaintDotNet.Effects.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Fundamentals">
+      <HintPath>$(PdnRoot)\PaintDotNet.Fundamentals.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Framework">
+      <HintPath>$(PdnRoot)\PaintDotNet.Framework.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Primitives">
+      <HintPath>$(PdnRoot)\PaintDotNet.Primitives.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.PropertySystem">
+      <HintPath>$(PdnRoot)\PaintDotNet.PropertySystem.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Windows">
+      <HintPath>$(PdnRoot)\PaintDotNet.Windows.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Windows.Core">
+      <HintPath>$(PdnRoot)\PaintDotNet.Windows.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PaintDotNet.Windows.Framework">
+      <HintPath>$(PdnRoot)\PaintDotNet.Windows.Framework.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="TrimAndMerge" AfterTargets="PostBuildEvent" Condition="'$(ConfigurationName)' == 'Release'">
+    <!-- Nuget documentation for $(PkgPackage_Name) properties: https://learn.microsoft.com/en-us/nuget/consume-packages/package-references-in-project-files -->
+    
+    <!-- Merge with ILRepack. -->
+    <Exec Command="&quot;$(PkgILRepack)\tools\ilrepack&quot; /internalize /union &quot;$(TargetDir)$(TargetName).dll&quot; &quot;$(TargetDir)0Harmony.dll&quot; /lib:&quot;$(PdnRoot)&quot; /out:&quot;$(TargetPath)&quot;" />
+    
+    <!-- Remove the output directory and its contents created by illink -->
+    <Delete Files="$(TargetDir)output" ContinueOnError="false" />
+    <RemoveDir Directories="$(TargetDir)output" ContinueOnError="false" />
+    
+    <!-- Remove ComputeSharp DLLs that are now merged -->
+    <Delete Files="$(TargetDir)0Harmony.dll" ContinueOnError="false" />
+  </Target>
+</Project>
