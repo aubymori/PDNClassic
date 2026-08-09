@@ -3,7 +3,6 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Threading;
-using System.Windows.Forms;
 
 internal static class StatusBarFix
 {
@@ -12,7 +11,7 @@ internal static class StatusBarFix
 
     private static readonly object sync = new();
 
-    private static Action<object, ToolStripItemTextRenderEventArgs> callBaseOnRenderItemText = null!;
+    private static Action<object, object> callBaseOnRenderItemText = null!;
     private static Func<int>? getEffectiveTheme;
     private static int aeroThemeValue;
     private static bool statusStripRendererPatched;
@@ -32,19 +31,17 @@ internal static class StatusBarFix
                 return;
             }
 
-            MethodInfo rendererMethod = GetDeclaredMethod(
-                rendererType,
-                "OnRenderItemText",
-                typeof(ToolStripItemTextRenderEventArgs));
+            MethodInfo rendererMethod = GetDeclaredSingleParameterMethod(rendererType, "OnRenderItemText");
+            Type eventArgsType = rendererMethod.GetParameters()[0].ParameterType;
 
             Type baseType = rendererType.BaseType
                 ?? throw new MissingMethodException(rendererType.FullName, "BaseType");
-            MethodInfo baseRendererMethod = GetDeclaredMethod(
+            MethodInfo baseRendererMethod = GetDeclaredSingleParameterMethod(
                 baseType,
                 "OnRenderItemText",
-                typeof(ToolStripItemTextRenderEventArgs));
+                eventArgsType);
 
-            callBaseOnRenderItemText = CreateBaseRendererInvoker(baseRendererMethod);
+            callBaseOnRenderItemText = CreateBaseRendererInvoker(baseRendererMethod, eventArgsType);
             TryInitializeThemeGetter();
 
             MethodInfo prefix = typeof(StatusBarFix).GetMethod(
@@ -57,23 +54,46 @@ internal static class StatusBarFix
         }
     }
 
-    private static MethodInfo GetDeclaredMethod(Type type, string name, params Type[] parameterTypes)
+    private static MethodInfo GetDeclaredSingleParameterMethod(
+        Type type,
+        string name,
+        Type? parameterType = null)
     {
-        return type.GetMethod(
-            name,
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
-            binder: null,
-            types: parameterTypes,
-            modifiers: null)
-            ?? throw new MissingMethodException(type.FullName, name);
+        MethodInfo? result = null;
+        foreach (MethodInfo method in type.GetMethods(
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (method.Name != name)
+            {
+                continue;
+            }
+
+            ParameterInfo[] parameters = method.GetParameters();
+            if (parameters.Length != 1 ||
+                (parameterType != null && parameters[0].ParameterType != parameterType))
+            {
+                continue;
+            }
+
+            if (result != null)
+            {
+                throw new AmbiguousMatchException($"{type.FullName}.{name}");
+            }
+
+            result = method;
+        }
+
+        return result ?? throw new MissingMethodException(type.FullName, name);
     }
 
-    private static Action<object, ToolStripItemTextRenderEventArgs> CreateBaseRendererInvoker(MethodInfo baseRendererMethod)
+    private static Action<object, object> CreateBaseRendererInvoker(
+        MethodInfo baseRendererMethod,
+        Type eventArgsType)
     {
         DynamicMethod invoker = new(
             "PDNClassic_CallBaseOnRenderItemText",
             typeof(void),
-            new[] { typeof(object), typeof(ToolStripItemTextRenderEventArgs) },
+            new[] { typeof(object), typeof(object) },
             typeof(StatusBarFix).Module,
             skipVisibility: true);
 
@@ -81,11 +101,11 @@ internal static class StatusBarFix
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Castclass, baseRendererMethod.DeclaringType!);
         il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Castclass, eventArgsType);
         il.Emit(OpCodes.Call, baseRendererMethod);
         il.Emit(OpCodes.Ret);
 
-        return (Action<object, ToolStripItemTextRenderEventArgs>)invoker.CreateDelegate(
-            typeof(Action<object, ToolStripItemTextRenderEventArgs>));
+        return (Action<object, object>)invoker.CreateDelegate(typeof(Action<object, object>));
     }
 
     private static void TryInitializeThemeGetter()
@@ -143,14 +163,14 @@ internal static class StatusBarFix
 
     private static bool StatusStripRendererOnRenderItemTextPrefix(
         object __instance,
-        ToolStripItemTextRenderEventArgs e)
+        object __0)
     {
         if (IsAeroTheme())
         {
             return true;
         }
 
-        callBaseOnRenderItemText(__instance, e);
+        callBaseOnRenderItemText(__instance, __0);
         return false;
     }
 
