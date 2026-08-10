@@ -57,6 +57,7 @@ internal static class StartupHook
     {
         StatusBarFix.Apply(harmony, assembly);
         ClassicThemeFix.Apply(harmony, assembly);
+        AeroThemeFix.Apply(harmony, assembly);
     }
 
     private static void ShowInitializationError(Exception e)

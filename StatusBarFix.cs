@@ -174,7 +174,7 @@ internal static class StatusBarFix
         return false;
     }
 
-    private static bool IsAeroTheme()
+    internal static bool IsAeroTheme()
     {
         try
         {
