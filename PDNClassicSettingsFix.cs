@@ -17,6 +17,7 @@ internal static class PDNClassicSettingsFix
     private const string OldIconAccommodationsValueName = "UseOldIconAccommodations";
     private const string MetroCloseButtonsValueName = "UseMetroCloseButtons";
     private const string OldToolWindowPositioningValueName = "UseOldToolWindowPositioning";
+    private const string GdiClassicFontRenderingValueName = "UseGdiClassicFontRendering";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
@@ -28,6 +29,8 @@ internal static class PDNClassicSettingsFix
         ReadMetroCloseButtonsEnabled();
     private static readonly bool oldToolWindowPositioningEnabledAtStartup =
         ReadOldToolWindowPositioningEnabled();
+    private static readonly bool gdiClassicFontRenderingEnabledAtStartup =
+        ReadGdiClassicFontRenderingEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -43,6 +46,8 @@ internal static class PDNClassicSettingsFix
         metroCloseButtonsEnabledAtStartup;
     internal static bool OldToolWindowPositioningEnabledAtStartup =>
         oldToolWindowPositioningEnabledAtStartup;
+    internal static bool GdiClassicFontRenderingEnabledAtStartup =>
+        gdiClassicFontRenderingEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -282,6 +287,7 @@ internal static class PDNClassicSettingsFix
             new DialogState(
                 ReadAeroGlassEnabled(),
                 ReadOldColorsEnabled(),
+                ReadGdiClassicFontRenderingEnabled(),
                 ReadOldIconAccommodationsEnabled(),
                 ReadMetroCloseButtonsEnabled(),
                 ReadOldToolWindowPositioningEnabled()));
@@ -330,6 +336,18 @@ internal static class PDNClassicSettingsFix
         pageControl.Controls.Add(oldColorsCheckBox);
         oldColorsCheckBox.PerformLayout();
 
+        Control gdiClassicFontRenderingCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useGdiClassicFontRenderingCheckBox",
+            "Use GDI classic font rendering",
+            ReadGdiClassicFontRenderingEnabled(),
+            OnGdiClassicFontRenderingCheckBoxChanged);
+        int gdiClassicFontRenderingTop =
+            oldColorsCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        gdiClassicFontRenderingCheckBox.Location = new Point(0, gdiClassicFontRenderingTop);
+        pageControl.Controls.Add(gdiClassicFontRenderingCheckBox);
+        gdiClassicFontRenderingCheckBox.PerformLayout();
+
         Control oldIconAccommodationsCheckBox = CreateCheckBox(
             checkBoxType,
             "useOldIconAccommodationsCheckBox",
@@ -337,7 +355,8 @@ internal static class PDNClassicSettingsFix
             ReadOldIconAccommodationsEnabled(),
             OnOldIconAccommodationsCheckBoxChanged);
         int oldIconAccommodationsTop =
-            oldColorsCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+            gdiClassicFontRenderingCheckBox.Bottom +
+            UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldIconAccommodationsCheckBox.Location = new Point(0, oldIconAccommodationsTop);
         pageControl.Controls.Add(oldIconAccommodationsCheckBox);
         oldIconAccommodationsCheckBox.PerformLayout();
@@ -426,6 +445,21 @@ internal static class PDNClassicSettingsFix
         bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
         WriteOldColorsEnabled(enabled);
     }
+
+    private static void OnGdiClassicFontRenderingCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteGdiClassicFontRenderingEnabled(enabled);
+    }
     private static void OnOldIconAccommodationsCheckBoxChanged(object? sender, EventArgs e)
     {
         if (sender == null)
@@ -481,6 +515,7 @@ internal static class PDNClassicSettingsFix
 
         bool currentAeroValue = ReadAeroGlassEnabled();
         bool currentOldColorsValue = ReadOldColorsEnabled();
+        bool currentGdiClassicFontRenderingValue = ReadGdiClassicFontRenderingEnabled();
         bool currentOldIconAccommodationsValue = ReadOldIconAccommodationsEnabled();
         bool currentMetroCloseButtonsValue = ReadMetroCloseButtonsEnabled();
         bool currentOldToolWindowPositioningValue = ReadOldToolWindowPositioningEnabled();
@@ -490,6 +525,9 @@ internal static class PDNClassicSettingsFix
         bool oldColorsRequireRestart =
             currentOldColorsValue != state.InitialOldColorsValue &&
             currentOldColorsValue != oldColorsEnabledAtStartup;
+        bool gdiClassicFontRenderingRequiresRestart =
+            currentGdiClassicFontRenderingValue != state.InitialGdiClassicFontRenderingValue &&
+            currentGdiClassicFontRenderingValue != gdiClassicFontRenderingEnabledAtStartup;
         bool oldIconAccommodationsRequireRestart =
             currentOldIconAccommodationsValue != state.InitialOldIconAccommodationsValue &&
             currentOldIconAccommodationsValue != oldIconAccommodationsEnabledAtStartup;
@@ -501,6 +539,7 @@ internal static class PDNClassicSettingsFix
             currentOldToolWindowPositioningValue != oldToolWindowPositioningEnabledAtStartup;
         if (!aeroRequiresRestart &&
             !oldColorsRequireRestart &&
+            !gdiClassicFontRenderingRequiresRestart &&
             !oldIconAccommodationsRequireRestart &&
             !metroCloseButtonsRequireRestart &&
             !oldToolWindowPositioningRequiresRestart)
@@ -534,6 +573,19 @@ internal static class PDNClassicSettingsFix
         {
             using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
             return key?.GetValue(OldColorsValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ReadGdiClassicFontRenderingEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(GdiClassicFontRenderingValueName) is int value && value != 0;
         }
         catch
         {
@@ -593,6 +645,16 @@ internal static class PDNClassicSettingsFix
             ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
         key.SetValue(OldColorsValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
     }
+
+    private static void WriteGdiClassicFontRenderingEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(
+            GdiClassicFontRenderingValueName,
+            enabled ? 1 : 0,
+            RegistryValueKind.DWord);
+    }
     private static void WriteOldIconAccommodationsEnabled(bool enabled)
     {
         using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
@@ -626,12 +688,14 @@ internal static class PDNClassicSettingsFix
         internal DialogState(
             bool initialAeroValue,
             bool initialOldColorsValue,
+            bool initialGdiClassicFontRenderingValue,
             bool initialOldIconAccommodationsValue,
             bool initialMetroCloseButtonsValue,
             bool initialOldToolWindowPositioningValue)
         {
             InitialAeroValue = initialAeroValue;
             InitialOldColorsValue = initialOldColorsValue;
+            InitialGdiClassicFontRenderingValue = initialGdiClassicFontRenderingValue;
             InitialOldIconAccommodationsValue = initialOldIconAccommodationsValue;
             InitialMetroCloseButtonsValue = initialMetroCloseButtonsValue;
             InitialOldToolWindowPositioningValue = initialOldToolWindowPositioningValue;
@@ -640,8 +704,13 @@ internal static class PDNClassicSettingsFix
         internal bool InitialAeroValue { get; }
 
         internal bool InitialOldColorsValue { get; }
+
+        internal bool InitialGdiClassicFontRenderingValue { get; }
+
         internal bool InitialOldIconAccommodationsValue { get; }
+
         internal bool InitialMetroCloseButtonsValue { get; }
+
         internal bool InitialOldToolWindowPositioningValue { get; }
     }
 }
