@@ -6,7 +6,6 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 internal static class AeroDialogGlassFix
@@ -14,19 +13,30 @@ internal static class AeroDialogGlassFix
     private const string PdnBaseFormTypeName = "PaintDotNet.PdnBaseForm";
     private const string EffectConfigFormTypeName = "PaintDotNet.Effects.EffectConfigForm";
     private const string SettingsDialogTypeName = "PaintDotNet.Settings.UI.SettingsDialog";
+    private const string ImageSizeDialogTypeName = "PaintDotNet.Dialogs.ImageSizeDialog";
     private const string GdiBufferedAnimationControlTypeName =
         "PaintDotNet.Gdi.GdiBufferedAnimationControl";
-    private const uint BlacknessRasterOperation = 0x00000042;
+    private sealed class ParentPaintInvoker : Control
+    {
+        internal void InvokeParentPaint(Control parent, PaintEventArgs e)
+        {
+            InvokePaintBackground(parent, e);
+            InvokePaint(parent, e);
+        }
+    }
+
 
     private static bool patched;
     private static bool effectConfigFormPatched;
     private static bool settingsDialogPatched;
+    private static bool imageSizeDialogPatched;
     private static bool gdiBufferedAnimationControlPatched;
     private static PropertyInfo? isGlassDesiredProperty;
     private static PropertyInfo? glassInsetProperty;
     private static PropertyInfo? autoHandleGlassRelatedOptimizationsProperty;
     private static readonly ConditionalWeakTable<Control, object> glassFooterControls = new();
     private static readonly object glassFooterControlMarker = new();
+    private static ParentPaintInvoker? parentPaintInvoker;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -125,6 +135,28 @@ internal static class AeroDialogGlassFix
                 settingsDialogPatched = true;
             }
 
+            Type? imageSizeDialogType = assembly.GetType(
+                ImageSizeDialogTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (imageSizeDialogType != null && !imageSizeDialogPatched)
+            {
+                MethodInfo doLayout = imageSizeDialogType.GetMethod(
+                    "DoLayout",
+                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                    binder: null,
+                    types: new[] { typeof(int), typeof(bool) },
+                    modifiers: null)
+                    ?? throw new MissingMethodException(
+                        imageSizeDialogType.FullName,
+                        "DoLayout(Int32, Boolean)");
+                harmony.Patch(
+                    doLayout,
+                    postfix: new HarmonyMethod(
+                        GetPatchMethod(nameof(ImageSizeDoLayoutPostfix))));
+                imageSizeDialogPatched = true;
+            }
+
             Type? animationControlType = assembly.GetType(
                 GdiBufferedAnimationControlTypeName,
                 throwOnError: false,
@@ -212,24 +244,12 @@ internal static class AeroDialogGlassFix
         }
 
         nint hdcValue = Unsafe.As<THdc, nint>(ref hdc);
-        _ = PatBlt(
-            hdcValue,
-            0,
-            0,
-            control.ClientSize.Width,
-            control.ClientSize.Height,
-            BlacknessRasterOperation);
+        using Graphics graphics = Graphics.FromHdc(hdcValue);
+        using PaintEventArgs paintEventArgs = new(graphics, control.Bounds);
+        graphics.Clear(Color.Transparent);
+        graphics.TranslateTransform(-control.Left, -control.Top);
+        (parentPaintInvoker ??= new ParentPaintInvoker()).InvokeParentPaint(control.Parent, paintEventArgs);
     }
-
-    [DllImport("gdi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PatBlt(
-        nint hdc,
-        int x,
-        int y,
-        int width,
-        int height,
-        uint rasterOperation);
 
     private static void OnShownPrefix(object __instance)
     {
@@ -306,6 +326,36 @@ internal static class AeroDialogGlassFix
         control.Height = height;
     }
 
+    private static void ImageSizeDoLayoutPostfix(
+        object __instance,
+        bool applyLayout,
+        ref Size __result)
+    {
+        if (!applyLayout ||
+            __instance is not Form form ||
+            !ShouldEnableFor(__instance))
+        {
+            return;
+        }
+
+        PropertyInfo? effectivelyEnabledProperty =
+            FindProperty(__instance.GetType(), "IsGlassEffectivelyEnabled");
+        if (effectivelyEnabledProperty?.GetValue(__instance) is not true)
+        {
+            return;
+        }
+
+        int buttonBottom = form.Controls
+            .Cast<Control>()
+            .Where(control =>
+                control.Visible &&
+                control.GetType().Name == "PdnPushButton")
+            .Select(control => control.Bottom)
+            .DefaultIfEmpty(__result.Height)
+            .Max();
+        __result = new Size(__result.Width, Math.Min(__result.Height, buttonBottom));
+    }
+
     private static void OnLayoutPostfix(object __instance)
     {
         if (!ShouldEnableFor(__instance) || __instance is not Form form)
@@ -320,7 +370,11 @@ internal static class AeroDialogGlassFix
         }
 
         int footerTop;
-        if (IsInstanceOfType(form, SettingsDialogTypeName))
+        if (IsInstanceOfType(form, ImageSizeDialogTypeName))
+        {
+            footerTop = FindImageSizeFooterTop(form);
+        }
+        else if (IsInstanceOfType(form, SettingsDialogTypeName))
         {
             int buttonTop = FindButtonTop(form);
             int footerGap = Math.Max(1, (7 * form.DeviceDpi + 48) / 96);
@@ -376,6 +430,21 @@ internal static class AeroDialogGlassFix
                 glassFooterControls.Add(control, glassFooterControlMarker);
             }
         }
+    }
+
+    internal static int FindImageSizeFooterTop(Form form)
+    {
+        Control? whiteSpaceControl = form.Controls
+            .Cast<Control>()
+            .FirstOrDefault(control => control.Name == "whiteSpaceControl");
+        if (whiteSpaceControl == null)
+        {
+            return FindFooterTop(form);
+        }
+
+        int footerTop = whiteSpaceControl.Top;
+        whiteSpaceControl.Visible = false;
+        return footerTop;
     }
 
     private static int FindFooterTop(Form form)
