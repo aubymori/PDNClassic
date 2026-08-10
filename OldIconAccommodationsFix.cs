@@ -13,6 +13,10 @@ internal static class OldIconAccommodationsFix
     private const string FontStyleButtonGroupTypeName =
         "PaintDotNet.Controls.ToolConfigUI.FontStyleFlagsButtonGroup";
     private const string ShapeTypeName = "PaintDotNet.Shapes.Shape";
+    private const string UIImageResourceTypeName = "PaintDotNet.Resources.UIImageResource";
+    private const string AnimatedResourcesTypeName = "PaintDotNet.Resources.AnimatedResources";
+    private const string BusySpinnerResourceName = "Images.Animation.BusySpinner";
+    private const string MetroBusySpinnerResourceName = "Images.Animation.BusySpinner.Metro";
     private const uint CurrentShapeColor = 4283071921u;
     private const uint LegacyShapeOutlineColor = 4283995329u;
     private const uint LegacyShapeGradientStartColor = 4290830835u;
@@ -20,9 +24,13 @@ internal static class OldIconAccommodationsFix
 
     private static bool fontStylePatched;
     private static bool shapePatched;
+    private static bool imageResourcePatched;
+    private static bool animatedResourcesReset;
     private static Type? linearGradientBrushType;
     private static Type? gradientStopType;
     private static PropertyInfo? gradientStopsProperty;
+    private static MethodInfo? imageResourceResolver;
+    private static MethodInfo? imageResourceResolverWrapper;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -33,6 +41,54 @@ internal static class OldIconAccommodationsFix
 
         lock (typeof(OldIconAccommodationsFix))
         {
+            Type? imageResourceType = assembly.GetType(
+                UIImageResourceTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (!imageResourcePatched && imageResourceType is not null)
+            {
+                MethodInfo getScaledImageResource = imageResourceType.GetProperty(
+                    "ScaledImageResource",
+                    BindingFlags.Instance | BindingFlags.NonPublic)?.GetMethod
+                    ?? throw new MissingMethodException(
+                        imageResourceType.FullName,
+                        "get_ScaledImageResource");
+                imageResourceResolver = imageResourceType
+                    .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+                    .SingleOrDefault(method =>
+                        method.Name == "TryGetBestImageResource" &&
+                        method.GetParameters().Length == 3)
+                    ?? throw new MissingMethodException(
+                        imageResourceType.FullName,
+                        "TryGetBestImageResource");
+                imageResourceResolverWrapper =
+                    CreateImageResourceResolverWrapper(imageResourceResolver);
+
+                harmony.Patch(
+                    getScaledImageResource,
+                    transpiler: new HarmonyMethod(
+                        GetPatchMethod(nameof(ScaledImageResourceTranspiler))));
+                imageResourcePatched = true;
+            }
+            Type? animatedResourcesType = assembly.GetType(
+                AnimatedResourcesTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (!animatedResourcesReset && animatedResourcesType is not null)
+            {
+                foreach (FieldInfo field in animatedResourcesType.GetFields(
+                    BindingFlags.Static | BindingFlags.NonPublic))
+                {
+                    if (!field.IsInitOnly &&
+                        field.Name.StartsWith("busySpinner", StringComparison.Ordinal))
+                    {
+                        field.SetValue(null, null);
+                    }
+                }
+                animatedResourcesReset = true;
+            }
+
+
             Type? buttonGroupType = assembly.GetType(
                 FontStyleButtonGroupTypeName,
                 throwOnError: false,
@@ -93,6 +149,123 @@ internal static class OldIconAccommodationsFix
             }
         }
     }
+
+    private static IEnumerable<CodeInstruction> ScaledImageResourceTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original)
+    {
+        MethodInfo resolver = imageResourceResolver
+            ?? throw new InvalidOperationException("Image resource resolver is unavailable.");
+        MethodInfo wrapper = imageResourceResolverWrapper
+            ?? throw new InvalidOperationException("Image resource resolver wrapper is unavailable.");
+        int replacementCount = 0;
+
+        foreach (CodeInstruction instruction in instructions)
+        {
+            if (instruction.Calls(resolver))
+            {
+                CodeInstruction replacement = new(OpCodes.Call, wrapper);
+                replacement.labels.AddRange(instruction.labels);
+                replacement.blocks.AddRange(instruction.blocks);
+                instruction.labels.Clear();
+                instruction.blocks.Clear();
+                yield return replacement;
+                ++replacementCount;
+            }
+            else
+            {
+                yield return instruction;
+            }
+        }
+
+        if (replacementCount != 1)
+        {
+            throw new MissingMethodException(
+                original.DeclaringType?.FullName,
+                "TryGetBestImageResource call");
+        }
+    }
+
+    private static MethodInfo CreateImageResourceResolverWrapper(MethodInfo resolver)
+    {
+        ParameterInfo[] parameters = resolver.GetParameters();
+        Type resultType = resolver.ReturnType;
+        Type resourceType = resultType.GetGenericArguments().Single();
+        MethodInfo resourceGetter = resultType.GetProperty("Resource")?.GetMethod
+            ?? throw new MissingMethodException(resultType.FullName, "get_Resource");
+        ConstructorInfo constructor = resultType.GetConstructor(
+            new[] { resourceType, typeof(UIScaleFactor) })
+            ?? throw new MissingMethodException(
+                resultType.FullName,
+                ".ctor(Resource, UIScaleFactor)");
+        DynamicMethod wrapper = new(
+            "PDNClassic_ResolveLegacyImageResource",
+            resultType,
+            parameters.Select(parameter => parameter.ParameterType).ToArray(),
+            typeof(OldIconAccommodationsFix).Module,
+            skipVisibility: true);
+        ILGenerator il = wrapper.GetILGenerator();
+        LocalBuilder result = il.DeclareLocal(resultType);
+        Label returnResult = il.DefineLabel();
+
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Box, parameters[1].ParameterType);
+        il.Emit(OpCodes.Ldarg_2);
+        il.Emit(OpCodes.Call, GetPatchMethod(nameof(SelectImageLookupScale)));
+        il.Emit(OpCodes.Call, resolver);
+        il.Emit(OpCodes.Stloc, result);
+
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Box, parameters[1].ParameterType);
+        il.Emit(OpCodes.Ldarg_2);
+        il.Emit(OpCodes.Call, GetPatchMethod(nameof(ShouldUseNativeSizeSpinner)));
+        il.Emit(OpCodes.Brfalse, returnResult);
+        il.Emit(OpCodes.Ldloc, result);
+        il.Emit(OpCodes.Callvirt, resourceGetter);
+        il.Emit(OpCodes.Ldarg_2);
+        il.Emit(OpCodes.Newobj, constructor);
+        il.Emit(OpCodes.Ret);
+
+        il.MarkLabel(returnResult);
+        il.Emit(OpCodes.Ldloc, result);
+        il.Emit(OpCodes.Ret);
+        return wrapper;
+    }
+
+    private static UIScaleFactor SelectImageLookupScale(
+        string name,
+        object resourceType,
+        UIScaleFactor requestedScaleFactor)
+    {
+        if (!string.Equals(resourceType.ToString(), "Image", StringComparison.Ordinal))
+        {
+            return requestedScaleFactor;
+        }
+
+        return IsBusySpinner(name) && requestedScaleFactor.Scale >= 1.5
+            ? UIScaleFactor.FromScale(2)
+            : UIScaleFactor.Legacy;
+    }
+
+    private static bool ShouldUseNativeSizeSpinner(
+        string name,
+        object resourceType,
+        UIScaleFactor requestedScaleFactor)
+    {
+        return string.Equals(resourceType.ToString(), "Image", StringComparison.Ordinal) &&
+            IsBusySpinner(name) &&
+            requestedScaleFactor.Scale >= 1.5;
+    }
+    private static bool IsBusySpinner(string name)
+    {
+        return string.Equals(name, BusySpinnerResourceName, StringComparison.Ordinal) ||
+            string.Equals(name, MetroBusySpinnerResourceName, StringComparison.Ordinal);
+    }
+
 
     private static IEnumerable<CodeInstruction> GetButtonImageTranspiler(
         IEnumerable<CodeInstruction> instructions,
