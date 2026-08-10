@@ -15,6 +15,8 @@ internal static class AeroDialogGlassFix
     private const string SettingsDialogTypeName = "PaintDotNet.Settings.UI.SettingsDialog";
     private const string ImageSizeDialogTypeName = "PaintDotNet.Dialogs.ImageSizeDialog";
     private const string SaveConfigDialogTypeName = "PaintDotNet.Dialogs.SaveConfigDialog";
+    private const string ColorProfileDialogTypeName = "PaintDotNet.Dialogs.ColorProfileDialog";
+    private const string IndirectUIDialogBaseTypeName = "PaintDotNet.Dialogs.IndirectUIDialogBase";
     private const string GdiBufferedAnimationControlTypeName =
         "PaintDotNet.Gdi.GdiBufferedAnimationControl";
     private sealed class ParentPaintInvoker : Control
@@ -32,6 +34,8 @@ internal static class AeroDialogGlassFix
     private static bool settingsDialogPatched;
     private static bool imageSizeDialogPatched;
     private static bool saveConfigDialogPatched;
+    private static bool colorProfileDialogPatched;
+    private static bool indirectUIDialogBasePatched;
     private static bool gdiBufferedAnimationControlPatched;
     private static PropertyInfo? isGlassDesiredProperty;
     private static PropertyInfo? glassInsetProperty;
@@ -177,8 +181,65 @@ internal static class AeroDialogGlassFix
                 harmony.Patch(
                     constructor,
                     postfix: new HarmonyMethod(
-                        GetPatchMethod(nameof(SaveConfigConstructorPostfix))));
+                        GetPatchMethod(nameof(EnableGlassConstructorPostfix))));
                 saveConfigDialogPatched = true;
+            }
+
+            Type? colorProfileDialogType = assembly.GetType(
+                ColorProfileDialogTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (colorProfileDialogType != null && !colorProfileDialogPatched)
+            {
+                ConstructorInfo constructor = colorProfileDialogType
+                    .GetConstructors(
+                        BindingFlags.Instance |
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic)
+                    .SingleOrDefault()
+                    ?? throw new MissingMethodException(
+                        colorProfileDialogType.FullName,
+                        ".ctor()");
+                MethodInfo onLayout = colorProfileDialogType.GetMethod(
+                    "OnLayout",
+                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                    binder: null,
+                    types: new[] { typeof(LayoutEventArgs) },
+                    modifiers: null)
+                    ?? throw new MissingMethodException(
+                        colorProfileDialogType.FullName,
+                        "OnLayout(LayoutEventArgs)");
+                harmony.Patch(
+                    constructor,
+                    postfix: new HarmonyMethod(
+                        GetPatchMethod(nameof(EnableGlassConstructorPostfix))));
+                harmony.Patch(
+                    onLayout,
+                    postfix: new HarmonyMethod(
+                        GetPatchMethod(nameof(ColorProfileOnLayoutPostfix))));
+                colorProfileDialogPatched = true;
+            }
+
+            Type? indirectUIDialogBaseType = assembly.GetType(
+                IndirectUIDialogBaseTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (indirectUIDialogBaseType != null && !indirectUIDialogBasePatched)
+            {
+                ConstructorInfo constructor = indirectUIDialogBaseType
+                    .GetConstructors(
+                        BindingFlags.Instance |
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic)
+                    .SingleOrDefault()
+                    ?? throw new MissingMethodException(
+                        indirectUIDialogBaseType.FullName,
+                        ".ctor(Object)");
+                harmony.Patch(
+                    constructor,
+                    postfix: new HarmonyMethod(
+                        GetPatchMethod(nameof(EnableGlassConstructorPostfix))));
+                indirectUIDialogBasePatched = true;
             }
 
             Type? animationControlType = assembly.GetType(
@@ -275,7 +336,7 @@ internal static class AeroDialogGlassFix
         (parentPaintInvoker ??= new ParentPaintInvoker()).InvokeParentPaint(control.Parent, paintEventArgs);
     }
 
-    private static void SaveConfigConstructorPostfix(object __instance)
+    private static void EnableGlassConstructorPostfix(object __instance)
     {
         isGlassDesiredProperty?.SetValue(__instance, true);
         autoHandleGlassRelatedOptimizationsProperty?.SetValue(__instance, true);
@@ -306,6 +367,47 @@ internal static class AeroDialogGlassFix
         }
 
         return false;
+    }
+
+    private static void ColorProfileOnLayoutPostfix(object __instance)
+    {
+        if (__instance is not Form form ||
+            FindProperty(__instance.GetType(), "IsGlassEffectivelyEnabled")?.GetValue(__instance) is not true)
+        {
+            return;
+        }
+
+        Control[] buttons = form.Controls
+            .Cast<Control>()
+            .Where(control =>
+                control.Visible &&
+                control.GetType().Name == "PdnPushButton")
+            .ToArray();
+        if (buttons.Length == 0)
+        {
+            return;
+        }
+
+        int footerButtonTop = buttons.Max(button => button.Top);
+        Control[] footerButtons = buttons
+            .Where(button => button.Top == footerButtonTop)
+            .ToArray();
+        int dx = form.ClientSize.Width - footerButtons.Max(button => button.Right);
+        int dy = form.ClientSize.Height - footerButtons.Max(button => button.Bottom);
+        foreach (Control button in footerButtons)
+        {
+            button.Location = new Point(button.Left + dx, button.Top + dy);
+        }
+
+        int footerTop = FindFooterTop(form);
+        if (footerTop >= 0 && footerTop < form.ClientSize.Height)
+        {
+            glassInsetProperty?.SetValue(
+                __instance,
+                new Padding(0, 0, 0, form.ClientSize.Height - footerTop));
+            NotifyFooterControlsOnGlass(form, footerTop);
+            form.SizeGripStyle = SizeGripStyle.Hide;
+        }
     }
 
     private static IEnumerable<CodeInstruction> SettingsOnLayoutTranspiler(
@@ -551,14 +653,15 @@ internal static class AeroDialogGlassFix
         {
             string? name = type.FullName;
             if (name == "PaintDotNet.Dialogs.AboutDialog" ||
-                name == "PaintDotNet.Dialogs.ImageSizeDialog" ||
-                name == "PaintDotNet.Dialogs.IndirectUIDialogBase" ||
-                name == "PaintDotNet.Dialogs.SaveConfigDialog" ||
+                name == ColorProfileDialogTypeName ||
+                name == ImageSizeDialogTypeName ||
+                name == IndirectUIDialogBaseTypeName ||
+                name == SaveConfigDialogTypeName ||
                 name == "PaintDotNet.Dialogs.TaskProgressDialog" ||
-                name == "PaintDotNet.Settings.UI.SettingsDialog" ||
+                name == SettingsDialogTypeName ||
                 name == "PaintDotNet.Updates.UpdatesDialog" ||
                 name == "PaintDotNet.Effects.EffectConfigDialog" ||
-                name == "PaintDotNet.Effects.EffectConfigForm")
+                name == EffectConfigFormTypeName)
             {
                 return true;
             }
