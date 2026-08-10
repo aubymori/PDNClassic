@@ -66,6 +66,7 @@ internal static class StartupHook
         ToolsSettingsClassicFix.Apply(harmony, assembly);
         OldIconAccommodationsFix.Apply(harmony, assembly);
         MetroIconsFix.Apply(harmony, assembly);
+        OldToolWindowPositioningFix.Apply(harmony, assembly);
     }
 
     private static void ShowInitializationError(Exception e)

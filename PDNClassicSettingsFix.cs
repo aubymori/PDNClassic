@@ -16,6 +16,7 @@ internal static class PDNClassicSettingsFix
     private const string OldColorsValueName = "UseOldColors";
     private const string OldIconAccommodationsValueName = "UseOldIconAccommodations";
     private const string MetroCloseButtonsValueName = "UseMetroCloseButtons";
+    private const string OldToolWindowPositioningValueName = "UseOldToolWindowPositioning";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
@@ -25,6 +26,8 @@ internal static class PDNClassicSettingsFix
         ReadOldIconAccommodationsEnabled();
     private static readonly bool metroCloseButtonsEnabledAtStartup =
         ReadMetroCloseButtonsEnabled();
+    private static readonly bool oldToolWindowPositioningEnabledAtStartup =
+        ReadOldToolWindowPositioningEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -38,6 +41,8 @@ internal static class PDNClassicSettingsFix
         oldIconAccommodationsEnabledAtStartup;
     internal static bool MetroIconsEnabledAtStartup =>
         metroCloseButtonsEnabledAtStartup;
+    internal static bool OldToolWindowPositioningEnabledAtStartup =>
+        oldToolWindowPositioningEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -278,7 +283,8 @@ internal static class PDNClassicSettingsFix
                 ReadAeroGlassEnabled(),
                 ReadOldColorsEnabled(),
                 ReadOldIconAccommodationsEnabled(),
-                ReadMetroCloseButtonsEnabled()));
+                ReadMetroCloseButtonsEnabled(),
+                ReadOldToolWindowPositioningEnabled()));
     }
 
     private static Type FindLoadedType(string fullName)
@@ -348,6 +354,18 @@ internal static class PDNClassicSettingsFix
         metroCloseButtonsCheckBox.Location = new Point(0, metroCloseButtonsTop);
         metroCloseButtonsCheckBox.Enabled = StatusBarFix.IsAeroTheme();
         pageControl.Controls.Add(metroCloseButtonsCheckBox);
+
+        Control oldToolWindowPositioningCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useOldToolWindowPositioningCheckBox",
+            "Use old tool window positioning",
+            ReadOldToolWindowPositioningEnabled(),
+            OnOldToolWindowPositioningCheckBoxChanged);
+        int oldToolWindowPositioningTop =
+            metroCloseButtonsCheckBox.Bottom +
+            UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        oldToolWindowPositioningCheckBox.Location = new Point(0, oldToolWindowPositioningTop);
+        pageControl.Controls.Add(oldToolWindowPositioningCheckBox);
     }
 
     private static Control CreateCheckBox(
@@ -437,6 +455,21 @@ internal static class PDNClassicSettingsFix
         WriteMetroCloseButtonsEnabled(enabled);
     }
 
+    private static void OnOldToolWindowPositioningCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteOldToolWindowPositioningEnabled(enabled);
+    }
+
 
 
     private static void SettingsDialogOnClosedPostfix(object __instance)
@@ -450,6 +483,7 @@ internal static class PDNClassicSettingsFix
         bool currentOldColorsValue = ReadOldColorsEnabled();
         bool currentOldIconAccommodationsValue = ReadOldIconAccommodationsEnabled();
         bool currentMetroCloseButtonsValue = ReadMetroCloseButtonsEnabled();
+        bool currentOldToolWindowPositioningValue = ReadOldToolWindowPositioningEnabled();
         bool aeroRequiresRestart =
             currentAeroValue != state.InitialAeroValue &&
             currentAeroValue != enabledAtStartup;
@@ -462,10 +496,14 @@ internal static class PDNClassicSettingsFix
         bool metroCloseButtonsRequireRestart =
             currentMetroCloseButtonsValue != state.InitialMetroCloseButtonsValue &&
             currentMetroCloseButtonsValue != metroCloseButtonsEnabledAtStartup;
+        bool oldToolWindowPositioningRequiresRestart =
+            currentOldToolWindowPositioningValue != state.InitialOldToolWindowPositioningValue &&
+            currentOldToolWindowPositioningValue != oldToolWindowPositioningEnabledAtStartup;
         if (!aeroRequiresRestart &&
             !oldColorsRequireRestart &&
             !oldIconAccommodationsRequireRestart &&
-            !metroCloseButtonsRequireRestart)
+            !metroCloseButtonsRequireRestart &&
+            !oldToolWindowPositioningRequiresRestart)
         {
             return;
         }
@@ -527,6 +565,19 @@ internal static class PDNClassicSettingsFix
         }
     }
 
+    private static bool ReadOldToolWindowPositioningEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(OldToolWindowPositioningValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
 
 
     private static void WriteAeroGlassEnabled(bool enabled)
@@ -558,6 +609,16 @@ internal static class PDNClassicSettingsFix
         key.SetValue(MetroCloseButtonsValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
     }
 
+    private static void WriteOldToolWindowPositioningEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(
+            OldToolWindowPositioningValueName,
+            enabled ? 1 : 0,
+            RegistryValueKind.DWord);
+    }
+
 
 
     private sealed class DialogState
@@ -566,12 +627,14 @@ internal static class PDNClassicSettingsFix
             bool initialAeroValue,
             bool initialOldColorsValue,
             bool initialOldIconAccommodationsValue,
-            bool initialMetroCloseButtonsValue)
+            bool initialMetroCloseButtonsValue,
+            bool initialOldToolWindowPositioningValue)
         {
             InitialAeroValue = initialAeroValue;
             InitialOldColorsValue = initialOldColorsValue;
             InitialOldIconAccommodationsValue = initialOldIconAccommodationsValue;
             InitialMetroCloseButtonsValue = initialMetroCloseButtonsValue;
+            InitialOldToolWindowPositioningValue = initialOldToolWindowPositioningValue;
         }
 
         internal bool InitialAeroValue { get; }
@@ -579,5 +642,6 @@ internal static class PDNClassicSettingsFix
         internal bool InitialOldColorsValue { get; }
         internal bool InitialOldIconAccommodationsValue { get; }
         internal bool InitialMetroCloseButtonsValue { get; }
+        internal bool InitialOldToolWindowPositioningValue { get; }
     }
 }
