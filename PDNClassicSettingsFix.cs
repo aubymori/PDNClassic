@@ -36,7 +36,7 @@ internal static class PDNClassicSettingsFix
     internal static bool OldColorsEnabledAtStartup => oldColorsEnabledAtStartup;
     internal static bool OldIconAccommodationsEnabledAtStartup =>
         oldIconAccommodationsEnabledAtStartup;
-    internal static bool MetroCloseButtonsEnabledAtStartup =>
+    internal static bool MetroIconsEnabledAtStartup =>
         metroCloseButtonsEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
@@ -339,7 +339,7 @@ internal static class PDNClassicSettingsFix
         Control metroCloseButtonsCheckBox = CreateCheckBox(
             checkBoxType,
             "useMetroCloseButtonsCheckBox",
-            "Use Metro close buttons",
+            "Use Metro icons",
             ReadMetroCloseButtonsEnabled(),
             OnMetroCloseButtonsCheckBoxChanged);
         int metroCloseButtonsTop =
