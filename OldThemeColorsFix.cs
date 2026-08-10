@@ -1,8 +1,10 @@
 using HarmonyLib;
+using System.Collections.Generic;
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Windows.Forms;
 
 internal static class OldThemeColorsFix
@@ -11,11 +13,16 @@ internal static class OldThemeColorsFix
     private const string BlueThemeTypeName = "PaintDotNet.VisualStyling.AeroBlueColorTheme";
     private const string LightThemeTypeName = "PaintDotNet.VisualStyling.AeroLightColorTheme";
     private const string ToolStripRendererTypeName = "PaintDotNet.VisualStyling.PdnToolStripRenderer";
+    private const string TrackBarStyleBuilderTypeName =
+        "PaintDotNet.Controls.PdnTrackBar+TrackBarStyleBuilder";
 
     private static readonly object sync = new();
     private static bool themeConstructorsPatched;
     private static bool rendererPatched;
+    private static bool trackBarStyleBuilderPatched;
     private static PropertyInfo? currentThemeProperty;
+    private static MethodInfo? controlLightLightGetter;
+    private static MethodInfo? getTrackBarDefaultColorMethod;
 
     internal static bool EnabledAtStartup => PDNClassicSettingsFix.OldColorsEnabledAtStartup;
 
@@ -53,6 +60,16 @@ internal static class OldThemeColorsFix
                     renderBackground,
                     prefix: new HarmonyMethod(GetPatchMethod(nameof(OnRenderToolStripBackgroundPrefix))));
                 rendererPatched = true;
+            }
+
+            Type? trackBarStyleBuilderType = assembly.GetType(
+                TrackBarStyleBuilderTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (!trackBarStyleBuilderPatched && trackBarStyleBuilderType != null)
+            {
+                PatchTrackBarStyleBuilder(harmony, trackBarStyleBuilderType);
+                trackBarStyleBuilderPatched = true;
             }
         }
     }
@@ -104,6 +121,73 @@ internal static class OldThemeColorsFix
     {
         return typeof(OldThemeColorsFix).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new MissingMethodException(typeof(OldThemeColorsFix).FullName, name);
+    }
+
+    private static void PatchTrackBarStyleBuilder(Harmony harmony, Type styleBuilderType)
+    {
+        controlLightLightGetter = typeof(SystemColors).GetProperty(
+            nameof(SystemColors.ControlLightLight),
+            BindingFlags.Static | BindingFlags.Public)?.GetMethod
+            ?? throw new MissingMethodException(typeof(SystemColors).FullName, "get_ControlLightLight");
+        getTrackBarDefaultColorMethod = GetPatchMethod(nameof(GetTrackBarDefaultColor));
+
+        int constructorCount = 0;
+        foreach (ConstructorInfo constructor in styleBuilderType.GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic |
+            BindingFlags.DeclaredOnly))
+        {
+            if (constructor.GetParameters().Length != 1)
+            {
+                continue;
+            }
+
+            harmony.Patch(
+                constructor,
+                transpiler: new HarmonyMethod(GetPatchMethod(nameof(TrackBarStyleBuilderTranspiler))));
+            ++constructorCount;
+        }
+
+        if (constructorCount != 2)
+        {
+            throw new InvalidOperationException(
+                $"Expected two {styleBuilderType.FullName} constructors, found {constructorCount}.");
+        }
+    }
+
+    private static Color GetTrackBarDefaultColor()
+    {
+        return IsOldPaletteActive() ? SystemColors.Control : SystemColors.ControlLightLight;
+    }
+
+    private static IEnumerable<CodeInstruction> TrackBarStyleBuilderTranspiler(
+        IEnumerable<CodeInstruction> instructions)
+    {
+        MethodInfo currentGetter = controlLightLightGetter
+            ?? throw new InvalidOperationException("SystemColors.ControlLightLight is unavailable.");
+        MethodInfo replacement = getTrackBarDefaultColorMethod
+            ?? throw new InvalidOperationException("Trackbar default color method is unavailable.");
+        int replacementCount = 0;
+
+        foreach (CodeInstruction instruction in instructions)
+        {
+            if (instruction.Calls(currentGetter))
+            {
+                ++replacementCount;
+                yield return new CodeInstruction(OpCodes.Call, replacement)
+                    .MoveLabelsFrom(instruction)
+                    .MoveBlocksFrom(instruction);
+            }
+            else
+            {
+                yield return instruction;
+            }
+        }
+
+        if (replacementCount != 2)
+        {
+            throw new InvalidOperationException(
+                $"Expected two default trackbar color calls, found {replacementCount}.");
+        }
     }
 
     private static void ThemeConstructorPostfix(object __instance)
