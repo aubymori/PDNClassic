@@ -59,6 +59,7 @@ internal static class StartupHook
         ClassicThemeFix.Apply(harmony, assembly);
         AeroThemeFix.Apply(harmony, assembly);
         PDNClassicSettingsFix.Apply(harmony, assembly);
+        AeroDialogGlassFix.Apply(harmony, assembly);
         AeroBasicThemeFix.Apply(harmony, assembly);
         AeroBasicBackgroundFix.Apply(harmony, assembly);
     }
