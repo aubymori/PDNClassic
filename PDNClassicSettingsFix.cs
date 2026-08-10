@@ -14,11 +14,14 @@ internal static class PDNClassicSettingsFix
     private const string RegistryPath = @"Software\paint.net\PDNClassic";
     private const string AeroGlassValueName = "EnableAeroGlass";
     private const string OldColorsValueName = "UseOldColors";
+    private const string OldIconAccommodationsValueName = "UseOldIconAccommodations";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
     private static readonly bool enabledAtStartup = ReadAeroGlassEnabled();
     private static readonly bool oldColorsEnabledAtStartup = ReadOldColorsEnabled();
+    private static readonly bool oldIconAccommodationsEnabledAtStartup =
+        ReadOldIconAccommodationsEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -28,6 +31,8 @@ internal static class PDNClassicSettingsFix
 
     internal static bool AeroGlassEnabledAtStartup => enabledAtStartup;
     internal static bool OldColorsEnabledAtStartup => oldColorsEnabledAtStartup;
+    internal static bool OldIconAccommodationsEnabledAtStartup =>
+        oldIconAccommodationsEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -264,7 +269,10 @@ internal static class PDNClassicSettingsFix
         sectionsListBox.Items.Add(section);
         dialogStates.Add(
             __instance,
-            new DialogState(ReadAeroGlassEnabled(), ReadOldColorsEnabled()));
+            new DialogState(
+                ReadAeroGlassEnabled(),
+                ReadOldColorsEnabled(),
+                ReadOldIconAccommodationsEnabled()));
     }
 
     private static Type FindLoadedType(string fullName)
@@ -308,6 +316,18 @@ internal static class PDNClassicSettingsFix
         int oldColorsTop = aeroCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldColorsCheckBox.Location = new Point(0, oldColorsTop);
         pageControl.Controls.Add(oldColorsCheckBox);
+        oldColorsCheckBox.PerformLayout();
+
+        Control oldIconAccommodationsCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useOldIconAccommodationsCheckBox",
+            "Use accommodations for old icons",
+            ReadOldIconAccommodationsEnabled(),
+            OnOldIconAccommodationsCheckBoxChanged);
+        int oldIconAccommodationsTop =
+            oldColorsCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        oldIconAccommodationsCheckBox.Location = new Point(0, oldIconAccommodationsTop);
+        pageControl.Controls.Add(oldIconAccommodationsCheckBox);
     }
 
     private static Control CreateCheckBox(
@@ -368,6 +388,21 @@ internal static class PDNClassicSettingsFix
         bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
         WriteOldColorsEnabled(enabled);
     }
+    private static void OnOldIconAccommodationsCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteOldIconAccommodationsEnabled(enabled);
+    }
+
 
     private static void SettingsDialogOnClosedPostfix(object __instance)
     {
@@ -378,13 +413,19 @@ internal static class PDNClassicSettingsFix
 
         bool currentAeroValue = ReadAeroGlassEnabled();
         bool currentOldColorsValue = ReadOldColorsEnabled();
+        bool currentOldIconAccommodationsValue = ReadOldIconAccommodationsEnabled();
         bool aeroRequiresRestart =
             currentAeroValue != state.InitialAeroValue &&
             currentAeroValue != enabledAtStartup;
         bool oldColorsRequireRestart =
             currentOldColorsValue != state.InitialOldColorsValue &&
             currentOldColorsValue != oldColorsEnabledAtStartup;
-        if (!aeroRequiresRestart && !oldColorsRequireRestart)
+        bool oldIconAccommodationsRequireRestart =
+            currentOldIconAccommodationsValue != state.InitialOldIconAccommodationsValue &&
+            currentOldIconAccommodationsValue != oldIconAccommodationsEnabledAtStartup;
+        if (!aeroRequiresRestart &&
+            !oldColorsRequireRestart &&
+            !oldIconAccommodationsRequireRestart)
         {
             return;
         }
@@ -421,6 +462,19 @@ internal static class PDNClassicSettingsFix
             return false;
         }
     }
+    private static bool ReadOldIconAccommodationsEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(OldIconAccommodationsValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
 
     private static void WriteAeroGlassEnabled(bool enabled)
     {
@@ -435,17 +489,32 @@ internal static class PDNClassicSettingsFix
             ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
         key.SetValue(OldColorsValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
     }
+    private static void WriteOldIconAccommodationsEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(
+            OldIconAccommodationsValueName,
+            enabled ? 1 : 0,
+            RegistryValueKind.DWord);
+    }
+
 
     private sealed class DialogState
     {
-        internal DialogState(bool initialAeroValue, bool initialOldColorsValue)
+        internal DialogState(
+            bool initialAeroValue,
+            bool initialOldColorsValue,
+            bool initialOldIconAccommodationsValue)
         {
             InitialAeroValue = initialAeroValue;
             InitialOldColorsValue = initialOldColorsValue;
+            InitialOldIconAccommodationsValue = initialOldIconAccommodationsValue;
         }
 
         internal bool InitialAeroValue { get; }
 
         internal bool InitialOldColorsValue { get; }
+        internal bool InitialOldIconAccommodationsValue { get; }
     }
 }

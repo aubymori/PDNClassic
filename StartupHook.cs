@@ -64,6 +64,7 @@ internal static class StartupHook
         AeroBasicThemeFix.Apply(harmony, assembly);
         AeroBasicBackgroundFix.Apply(harmony, assembly);
         ToolsSettingsClassicFix.Apply(harmony, assembly);
+        OldIconAccommodationsFix.Apply(harmony, assembly);
     }
 
     private static void ShowInitializationError(Exception e)
