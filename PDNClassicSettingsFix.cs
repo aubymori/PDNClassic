@@ -305,7 +305,7 @@ internal static class PDNClassicSettingsFix
             "Use old colors",
             ReadOldColorsEnabled(),
             OnOldColorsCheckBoxChanged);
-        int oldColorsTop = aeroCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(11);
+        int oldColorsTop = aeroCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldColorsCheckBox.Location = new Point(0, oldColorsTop);
         pageControl.Controls.Add(oldColorsCheckBox);
     }
