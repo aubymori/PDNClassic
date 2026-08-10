@@ -13,10 +13,12 @@ internal static class PDNClassicSettingsFix
     private const string SettingsDialogTypeName = "PaintDotNet.Settings.UI.SettingsDialog";
     private const string RegistryPath = @"Software\paint.net\PDNClassic";
     private const string AeroGlassValueName = "EnableAeroGlass";
+    private const string OldColorsValueName = "UseOldColors";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
     private static readonly bool enabledAtStartup = ReadAeroGlassEnabled();
+    private static readonly bool oldColorsEnabledAtStartup = ReadOldColorsEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -25,6 +27,7 @@ internal static class PDNClassicSettingsFix
     private static FieldInfo? sectionsListBoxField;
 
     internal static bool AeroGlassEnabledAtStartup => enabledAtStartup;
+    internal static bool OldColorsEnabledAtStartup => oldColorsEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -259,7 +262,9 @@ internal static class PDNClassicSettingsFix
             throw new InvalidOperationException("SettingsDialog.sectionsListBox is not a ListBox.");
         }
         sectionsListBox.Items.Add(section);
-        dialogStates.Add(__instance, new DialogState(ReadAeroGlassEnabled()));
+        dialogStates.Add(
+            __instance,
+            new DialogState(ReadAeroGlassEnabled(), ReadOldColorsEnabled()));
     }
 
     private static Type FindLoadedType(string fullName)
@@ -284,6 +289,34 @@ internal static class PDNClassicSettingsFix
         }
 
         Type checkBoxType = FindLoadedType("PaintDotNet.Controls.PdnCheckBox");
+        Control aeroCheckBox = CreateCheckBox(
+            checkBoxType,
+            "enableAeroGlassCheckBox",
+            "Enable Aero glass effect",
+            ReadAeroGlassEnabled(),
+            OnAeroGlassCheckBoxChanged);
+        aeroCheckBox.Location = new Point(0, UIScaleFactor.Current.ConvertDipsToPixelsInt(4));
+        pageControl.Controls.Add(aeroCheckBox);
+        aeroCheckBox.PerformLayout();
+
+        Control oldColorsCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useOldColorsCheckBox",
+            "Use old colors",
+            ReadOldColorsEnabled(),
+            OnOldColorsCheckBoxChanged);
+        int oldColorsTop = aeroCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(11);
+        oldColorsCheckBox.Location = new Point(0, oldColorsTop);
+        pageControl.Controls.Add(oldColorsCheckBox);
+    }
+
+    private static Control CreateCheckBox(
+        Type checkBoxType,
+        string name,
+        string text,
+        bool isChecked,
+        EventHandler changedHandler)
+    {
         object checkBoxObject = Activator.CreateInstance(checkBoxType, nonPublic: true)
             ?? throw new InvalidOperationException("Could not create PdnCheckBox.");
         if (checkBoxObject is not Control checkBox)
@@ -291,17 +324,21 @@ internal static class PDNClassicSettingsFix
             throw new InvalidOperationException("PdnCheckBox is not a Control.");
         }
 
-        PropertyInfo isCheckedProperty = checkBoxType.GetProperty("IsChecked", BindingFlags.Instance | BindingFlags.Public)
+        PropertyInfo isCheckedProperty = checkBoxType.GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
             ?? throw new MissingMemberException(checkBoxType.FullName, "IsChecked");
-        EventInfo isCheckedChangedEvent = checkBoxType.GetEvent("IsCheckedChanged", BindingFlags.Instance | BindingFlags.Public)
+        EventInfo isCheckedChangedEvent = checkBoxType.GetEvent(
+            "IsCheckedChanged",
+            BindingFlags.Instance | BindingFlags.Public)
             ?? throw new MissingMemberException(checkBoxType.FullName, "IsCheckedChanged");
-        checkBox.Name = "enableAeroGlassCheckBox";
-        checkBox.Text = "Enable Aero glass effect";
+
+        checkBox.Name = name;
+        checkBox.Text = text;
         checkBox.AutoSize = true;
-        checkBox.Location = new Point(0, UIScaleFactor.Current.ConvertDipsToPixelsInt(4));
-        isCheckedProperty.SetValue(checkBoxObject, ReadAeroGlassEnabled());
-        isCheckedChangedEvent.AddEventHandler(checkBoxObject, new EventHandler(OnAeroGlassCheckBoxChanged));
-        pageControl.Controls.Add(checkBox);
+        isCheckedProperty.SetValue(checkBoxObject, isChecked);
+        isCheckedChangedEvent.AddEventHandler(checkBoxObject, changedHandler);
+        return checkBox;
     }
 
     private static void OnAeroGlassCheckBoxChanged(object? sender, EventArgs e)
@@ -317,6 +354,21 @@ internal static class PDNClassicSettingsFix
         WriteAeroGlassEnabled(enabled);
     }
 
+    private static void OnOldColorsCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteOldColorsEnabled(enabled);
+    }
+
     private static void SettingsDialogOnClosedPostfix(object __instance)
     {
         if (!dialogStates.TryGetValue(__instance, out DialogState? state))
@@ -324,8 +376,15 @@ internal static class PDNClassicSettingsFix
             return;
         }
 
-        bool currentValue = ReadAeroGlassEnabled();
-        if (currentValue == state.InitialValue || currentValue == enabledAtStartup)
+        bool currentAeroValue = ReadAeroGlassEnabled();
+        bool currentOldColorsValue = ReadOldColorsEnabled();
+        bool aeroRequiresRestart =
+            currentAeroValue != state.InitialAeroValue &&
+            currentAeroValue != enabledAtStartup;
+        bool oldColorsRequireRestart =
+            currentOldColorsValue != state.InitialOldColorsValue &&
+            currentOldColorsValue != oldColorsEnabledAtStartup;
+        if (!aeroRequiresRestart && !oldColorsRequireRestart)
         {
             return;
         }
@@ -350,6 +409,19 @@ internal static class PDNClassicSettingsFix
         }
     }
 
+    private static bool ReadOldColorsEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(OldColorsValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static void WriteAeroGlassEnabled(bool enabled)
     {
         using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
@@ -357,13 +429,23 @@ internal static class PDNClassicSettingsFix
         key.SetValue(AeroGlassValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
     }
 
+    private static void WriteOldColorsEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(OldColorsValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
+    }
+
     private sealed class DialogState
     {
-        internal DialogState(bool initialValue)
+        internal DialogState(bool initialAeroValue, bool initialOldColorsValue)
         {
-            InitialValue = initialValue;
+            InitialAeroValue = initialAeroValue;
+            InitialOldColorsValue = initialOldColorsValue;
         }
 
-        internal bool InitialValue { get; }
+        internal bool InitialAeroValue { get; }
+
+        internal bool InitialOldColorsValue { get; }
     }
 }

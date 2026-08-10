@@ -292,14 +292,16 @@ internal static class ClassicThemeFix
             typeof(ClassicThemeFix).Module,
             skipVisibility: true);
 
-        MethodInfo isAeroTheme = typeof(StatusBarFix).GetMethod(
-            "IsAeroTheme",
+        MethodInfo shouldDrawBackground = typeof(ClassicThemeFix).GetMethod(
+            nameof(ShouldDrawZoomSliderBackground),
             BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(typeof(StatusBarFix).FullName, "IsAeroTheme");
+            ?? throw new MissingMethodException(
+                typeof(ClassicThemeFix).FullName,
+                nameof(ShouldDrawZoomSliderBackground));
 
         ILGenerator il = conditionalFill.GetILGenerator();
         Label drawBackground = il.DefineLabel();
-        il.Emit(OpCodes.Call, isAeroTheme);
+        il.Emit(OpCodes.Call, shouldDrawBackground);
         il.Emit(OpCodes.Brtrue, drawBackground);
         il.Emit(OpCodes.Ret);
         il.MarkLabel(drawBackground);
@@ -310,6 +312,11 @@ internal static class ClassicThemeFix
         il.Emit(OpCodes.Call, fillRectangleMethod);
         il.Emit(OpCodes.Ret);
         return conditionalFill;
+    }
+
+    private static bool ShouldDrawZoomSliderBackground()
+    {
+        return StatusBarFix.IsAeroTheme() && !OldThemeColorsFix.IsOldPaletteActive();
     }
 
     private static ColorBgr24 CorrectColor(ColorBgr24 color)

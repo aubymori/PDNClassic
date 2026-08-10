@@ -165,7 +165,7 @@ internal static class StatusBarFix
         object __instance,
         object __0)
     {
-        if (IsAeroTheme())
+        if (IsAeroTheme() && !OldThemeColorsFix.IsOldPaletteActive())
         {
             return true;
         }
