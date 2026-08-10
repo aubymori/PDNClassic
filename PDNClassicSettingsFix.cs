@@ -15,6 +15,7 @@ internal static class PDNClassicSettingsFix
     private const string AeroGlassValueName = "EnableAeroGlass";
     private const string OldColorsValueName = "UseOldColors";
     private const string OldIconAccommodationsValueName = "UseOldIconAccommodations";
+    private const string MetroCloseButtonsValueName = "UseMetroCloseButtons";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
@@ -22,6 +23,8 @@ internal static class PDNClassicSettingsFix
     private static readonly bool oldColorsEnabledAtStartup = ReadOldColorsEnabled();
     private static readonly bool oldIconAccommodationsEnabledAtStartup =
         ReadOldIconAccommodationsEnabled();
+    private static readonly bool metroCloseButtonsEnabledAtStartup =
+        ReadMetroCloseButtonsEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -33,6 +36,8 @@ internal static class PDNClassicSettingsFix
     internal static bool OldColorsEnabledAtStartup => oldColorsEnabledAtStartup;
     internal static bool OldIconAccommodationsEnabledAtStartup =>
         oldIconAccommodationsEnabledAtStartup;
+    internal static bool MetroCloseButtonsEnabledAtStartup =>
+        metroCloseButtonsEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -272,7 +277,8 @@ internal static class PDNClassicSettingsFix
             new DialogState(
                 ReadAeroGlassEnabled(),
                 ReadOldColorsEnabled(),
-                ReadOldIconAccommodationsEnabled()));
+                ReadOldIconAccommodationsEnabled(),
+                ReadMetroCloseButtonsEnabled()));
     }
 
     private static Type FindLoadedType(string fullName)
@@ -328,6 +334,20 @@ internal static class PDNClassicSettingsFix
             oldColorsCheckBox.Bottom + UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldIconAccommodationsCheckBox.Location = new Point(0, oldIconAccommodationsTop);
         pageControl.Controls.Add(oldIconAccommodationsCheckBox);
+        oldIconAccommodationsCheckBox.PerformLayout();
+
+        Control metroCloseButtonsCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useMetroCloseButtonsCheckBox",
+            "Use Metro close buttons",
+            ReadMetroCloseButtonsEnabled(),
+            OnMetroCloseButtonsCheckBoxChanged);
+        int metroCloseButtonsTop =
+            oldIconAccommodationsCheckBox.Bottom +
+            UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        metroCloseButtonsCheckBox.Location = new Point(0, metroCloseButtonsTop);
+        metroCloseButtonsCheckBox.Enabled = StatusBarFix.IsAeroTheme();
+        pageControl.Controls.Add(metroCloseButtonsCheckBox);
     }
 
     private static Control CreateCheckBox(
@@ -402,6 +422,21 @@ internal static class PDNClassicSettingsFix
         bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
         WriteOldIconAccommodationsEnabled(enabled);
     }
+    private static void OnMetroCloseButtonsCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteMetroCloseButtonsEnabled(enabled);
+    }
+
 
 
     private static void SettingsDialogOnClosedPostfix(object __instance)
@@ -414,6 +449,7 @@ internal static class PDNClassicSettingsFix
         bool currentAeroValue = ReadAeroGlassEnabled();
         bool currentOldColorsValue = ReadOldColorsEnabled();
         bool currentOldIconAccommodationsValue = ReadOldIconAccommodationsEnabled();
+        bool currentMetroCloseButtonsValue = ReadMetroCloseButtonsEnabled();
         bool aeroRequiresRestart =
             currentAeroValue != state.InitialAeroValue &&
             currentAeroValue != enabledAtStartup;
@@ -423,9 +459,13 @@ internal static class PDNClassicSettingsFix
         bool oldIconAccommodationsRequireRestart =
             currentOldIconAccommodationsValue != state.InitialOldIconAccommodationsValue &&
             currentOldIconAccommodationsValue != oldIconAccommodationsEnabledAtStartup;
+        bool metroCloseButtonsRequireRestart =
+            currentMetroCloseButtonsValue != state.InitialMetroCloseButtonsValue &&
+            currentMetroCloseButtonsValue != metroCloseButtonsEnabledAtStartup;
         if (!aeroRequiresRestart &&
             !oldColorsRequireRestart &&
-            !oldIconAccommodationsRequireRestart)
+            !oldIconAccommodationsRequireRestart &&
+            !metroCloseButtonsRequireRestart)
         {
             return;
         }
@@ -474,6 +514,19 @@ internal static class PDNClassicSettingsFix
             return false;
         }
     }
+    private static bool ReadMetroCloseButtonsEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(MetroCloseButtonsValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
 
 
     private static void WriteAeroGlassEnabled(bool enabled)
@@ -498,6 +551,13 @@ internal static class PDNClassicSettingsFix
             enabled ? 1 : 0,
             RegistryValueKind.DWord);
     }
+    private static void WriteMetroCloseButtonsEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(MetroCloseButtonsValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
+    }
+
 
 
     private sealed class DialogState
@@ -505,16 +565,19 @@ internal static class PDNClassicSettingsFix
         internal DialogState(
             bool initialAeroValue,
             bool initialOldColorsValue,
-            bool initialOldIconAccommodationsValue)
+            bool initialOldIconAccommodationsValue,
+            bool initialMetroCloseButtonsValue)
         {
             InitialAeroValue = initialAeroValue;
             InitialOldColorsValue = initialOldColorsValue;
             InitialOldIconAccommodationsValue = initialOldIconAccommodationsValue;
+            InitialMetroCloseButtonsValue = initialMetroCloseButtonsValue;
         }
 
         internal bool InitialAeroValue { get; }
 
         internal bool InitialOldColorsValue { get; }
         internal bool InitialOldIconAccommodationsValue { get; }
+        internal bool InitialMetroCloseButtonsValue { get; }
     }
 }
