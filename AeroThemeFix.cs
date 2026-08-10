@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 internal static class AeroThemeFix
 {
     private const string ToolBarTypeName = "PaintDotNet.Controls.PdnToolBar";
+    private const string MainFormTypeName = "PaintDotNet.Dialogs.MainForm";
     private const string DrawingContextUtilTypeName = "PaintDotNet.Drawing.DrawingContextUtil";
 
     private const int BpbfTopDownDib = 2;
@@ -37,6 +38,7 @@ internal static class AeroThemeFix
     private static PropertyInfo? documentStripLeftProperty;
     private static PropertyInfo? formHandleProperty;
     private static PropertyInfo? formTextProperty;
+    private static MethodInfo? refreshGlassMethod;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -97,6 +99,24 @@ internal static class AeroThemeFix
                 ?? throw new MissingMemberException(formType.FullName, "Handle");
             formTextProperty = formType.GetProperty("Text", BindingFlags.Instance | BindingFlags.Public)
                 ?? throw new MissingMemberException(formType.FullName, "Text");
+            Type mainFormType = assembly.GetType(
+                MainFormTypeName,
+                throwOnError: false,
+                ignoreCase: false)
+                ?? throw new TypeLoadException(MainFormTypeName);
+            MethodInfo onShown = FindInstanceMethod(
+                mainFormType,
+                "OnShown",
+                typeof(EventArgs));
+            refreshGlassMethod = mainFormType.GetMethod(
+                "RefreshGlass",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: null,
+                types: new[] { typeof(bool) },
+                modifiers: null)
+                ?? throw new MissingMethodException(
+                    mainFormType.FullName,
+                    "RefreshGlass(bool)");
 
             MethodInfo transpiler = typeof(AeroThemeFix).GetMethod(
                 nameof(PaintBackgroundTranspiler),
@@ -114,6 +134,12 @@ internal static class AeroThemeFix
                 nameof(UpdateTitlePostfix),
                 BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException(typeof(AeroThemeFix).FullName, nameof(UpdateTitlePostfix));
+            MethodInfo onShownPostfix = typeof(AeroThemeFix).GetMethod(
+                nameof(OnShownPostfix),
+                BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(
+                    typeof(AeroThemeFix).FullName,
+                    nameof(OnShownPostfix));
 
 
             AeroThemeFix.glassCaptionDragInsetGetter = glassCaptionDragInsetGetter;
@@ -127,8 +153,36 @@ internal static class AeroThemeFix
             harmony.Patch(
                 updateTitle,
                 postfix: new HarmonyMethod(updateTitlePostfix));
+            harmony.Patch(
+                onShown,
+                postfix: new HarmonyMethod(onShownPostfix));
             patched = true;
         }
+    }
+
+    private static MethodInfo FindInstanceMethod(
+        Type type,
+        string name,
+        params Type[] parameterTypes)
+    {
+        for (Type? current = type; current != null; current = current.BaseType)
+        {
+            MethodInfo? method = current.GetMethod(
+                name,
+                BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.NonPublic |
+                BindingFlags.DeclaredOnly,
+                binder: null,
+                types: parameterTypes,
+                modifiers: null);
+            if (method != null)
+            {
+                return method;
+            }
+        }
+
+        throw new MissingMethodException(type.FullName, name);
     }
 
     private static MethodInfo FindPaintBackground(Type toolBarType)
@@ -161,6 +215,36 @@ internal static class AeroThemeFix
         return result ?? throw new MissingMethodException(toolBarType.FullName, "PaintBackground(Graphics, Rectangle)");
     }
 
+    private static void OnShownPostfix(object __instance)
+    {
+        if (!StatusBarFix.IsAeroTheme() ||
+            __instance.GetType().FullName != MainFormTypeName ||
+            __instance is not System.Windows.Forms.Control control ||
+            !control.IsHandleCreated)
+        {
+            return;
+        }
+
+        // OnShown still runs inside the initial WinForms show/layout stack.
+        // Queue the native frame update so it samples the final toolbar bounds.
+        control.BeginInvoke((Action)(() => RefreshGlassAfterInitialLayout(__instance)));
+    }
+
+    private static void RefreshGlassAfterInitialLayout(object instance)
+    {
+        if (instance is not System.Windows.Forms.Control control ||
+            control.IsDisposed ||
+            !control.IsHandleCreated)
+        {
+            return;
+        }
+
+        control.PerformLayout();
+        refreshGlassMethod?.Invoke(instance, new object[] { false });
+        control.Invalidate(invalidateChildren: true);
+        control.Update();
+    }
+
     private static bool GlassInsetPrefix(
         object __instance,
         ref System.Windows.Forms.Padding __result)
@@ -176,9 +260,21 @@ internal static class AeroThemeFix
             throw new InvalidOperationException("PdnToolBar.GlassCaptionDragInset did not return Padding.");
         }
 
-        __result = padding;
+        __result = GetLegacyGlassInset(padding);
         return false;
     }
+    internal static System.Windows.Forms.Padding GetLegacyGlassInset(
+        System.Windows.Forms.Padding captionDragInset)
+    {
+        // Paint.NET 5's caption drag inset is one pixel shallower than the
+        // +3-pixel menu inset used by Paint.NET 4.1 and 4.3.
+        return new System.Windows.Forms.Padding(
+            captionDragInset.Left,
+            checked(captionDragInset.Top + 1),
+            captionDragInset.Right,
+            captionDragInset.Bottom);
+    }
+
 
     private static IEnumerable<CodeInstruction> PaintBackgroundTranspiler(
         IEnumerable<CodeInstruction> instructions,
