@@ -41,6 +41,11 @@ internal static class AeroThemeFix
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
+        if (!PDNClassicSettingsFix.AeroGlassEnabledAtStartup)
+        {
+            return;
+        }
+
         lock (sync)
         {
             if (patched)

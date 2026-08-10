@@ -1,0 +1,369 @@
+using HarmonyLib;
+using PaintDotNet;
+using Microsoft.Win32;
+using System;
+using System.Drawing;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
+using System.Windows.Forms;
+
+internal static class PDNClassicSettingsFix
+{
+    private const string SettingsDialogTypeName = "PaintDotNet.Settings.UI.SettingsDialog";
+    private const string RegistryPath = @"Software\paint.net\PDNClassic";
+    private const string AeroGlassValueName = "EnableAeroGlass";
+
+    private static readonly object sync = new();
+    private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
+    private static readonly bool enabledAtStartup = ReadAeroGlassEnabled();
+    private static bool patched;
+    private static ConstructorInfo? runtimeSectionConstructor;
+    private static FieldInfo? appSettingsField;
+    private static FieldInfo? settingsSectionsField;
+    private static FieldInfo? settingsPagesField;
+    private static FieldInfo? sectionsListBoxField;
+
+    internal static bool AeroGlassEnabledAtStartup => enabledAtStartup;
+
+    internal static void Apply(Harmony harmony, Assembly assembly)
+    {
+        lock (sync)
+        {
+            if (patched)
+            {
+                return;
+            }
+
+            Type? dialogType = assembly.GetType(SettingsDialogTypeName, throwOnError: false, ignoreCase: false);
+            if (dialogType == null)
+            {
+                return;
+            }
+
+            appSettingsField = GetRequiredField(dialogType, "appSettings");
+            settingsSectionsField = GetRequiredField(dialogType, "settingsSections");
+            settingsPagesField = GetRequiredField(dialogType, "settingsPages");
+            sectionsListBoxField = GetRequiredField(dialogType, "sectionsListBox");
+
+            Type sectionType = settingsSectionsField.FieldType.GetElementType()
+                ?? throw new InvalidOperationException("SettingsDialog.settingsSections is not an array.");
+            Type pageType = settingsPagesField.FieldType.GetElementType()
+                ?? throw new InvalidOperationException("SettingsDialog.settingsPages is not an array.");
+            runtimeSectionConstructor = CreateRuntimeSectionTypes(sectionType, pageType);
+
+            ConstructorInfo dialogConstructor = GetSingleInstanceConstructor(dialogType);
+            MethodInfo onClosed = dialogType.GetMethod(
+                "OnClosed",
+                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                binder: null,
+                types: new[] { typeof(EventArgs) },
+                modifiers: null)
+                ?? throw new MissingMethodException(dialogType.FullName, "OnClosed(EventArgs)");
+            MethodInfo constructorPostfix = typeof(PDNClassicSettingsFix).GetMethod(
+                nameof(SettingsDialogConstructorPostfix),
+                BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(typeof(PDNClassicSettingsFix).FullName, nameof(SettingsDialogConstructorPostfix));
+            MethodInfo onClosedPostfix = typeof(PDNClassicSettingsFix).GetMethod(
+                nameof(SettingsDialogOnClosedPostfix),
+                BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(typeof(PDNClassicSettingsFix).FullName, nameof(SettingsDialogOnClosedPostfix));
+
+            harmony.Patch(dialogConstructor, postfix: new HarmonyMethod(constructorPostfix));
+            harmony.Patch(onClosed, postfix: new HarmonyMethod(onClosedPostfix));
+            patched = true;
+        }
+    }
+
+    private static FieldInfo GetRequiredField(Type type, string name)
+    {
+        return type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            ?? throw new MissingFieldException(type.FullName, name);
+    }
+
+    private static ConstructorInfo GetSingleInstanceConstructor(Type type)
+    {
+        ConstructorInfo? result = null;
+        foreach (ConstructorInfo constructor in type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (result != null)
+            {
+                throw new AmbiguousMatchException(type.FullName + ".ctor");
+            }
+
+            result = constructor;
+        }
+
+        return result ?? throw new MissingMethodException(type.FullName, ".ctor");
+    }
+
+    private static ConstructorInfo CreateRuntimeSectionTypes(Type sectionType, Type pageType)
+    {
+        AssemblyName assemblyName = new("PDNClassic.SettingsUI.Runtime");
+        AssemblyBuilder assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run);
+        ModuleBuilder moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name!);
+        Type ignoresAccessChecksAttribute = DefineIgnoresAccessChecksAttribute(moduleBuilder);
+        ConstructorInfo ignoresAccessChecksConstructor = ignoresAccessChecksAttribute.GetConstructor(new[] { typeof(string) })
+            ?? throw new MissingMethodException(ignoresAccessChecksAttribute.FullName, ".ctor(string)");
+        assemblyBuilder.SetCustomAttribute(new CustomAttributeBuilder(
+            ignoresAccessChecksConstructor,
+            new object[] { sectionType.Assembly.GetName().Name! }));
+        assemblyBuilder.SetCustomAttribute(new CustomAttributeBuilder(
+            ignoresAccessChecksConstructor,
+            new object[] { typeof(PDNClassicSettingsFix).Assembly.GetName().Name! }));
+
+        ConstructorInfo pageBaseConstructor = pageType.GetConstructor(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            types: new[] { sectionType },
+            modifiers: null)
+            ?? throw new MissingMethodException(pageType.FullName, ".ctor(SettingsDialogSection)");
+        MethodInfo configurePage = typeof(PDNClassicSettingsFix).GetMethod(
+            nameof(ConfigurePage),
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(PDNClassicSettingsFix).FullName, nameof(ConfigurePage));
+
+        TypeBuilder pageBuilder = moduleBuilder.DefineType(
+            "PDNClassic.Settings.UI.PDNClassicSettingsPage",
+            TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.NotPublic,
+            pageType);
+        ConstructorBuilder pageConstructor = pageBuilder.DefineConstructor(
+            MethodAttributes.Public,
+            CallingConventions.Standard,
+            new[] { sectionType });
+        ILGenerator pageConstructorIl = pageConstructor.GetILGenerator();
+        pageConstructorIl.Emit(OpCodes.Ldarg_0);
+        pageConstructorIl.Emit(OpCodes.Ldarg_1);
+        pageConstructorIl.Emit(OpCodes.Call, pageBaseConstructor);
+        pageConstructorIl.Emit(OpCodes.Ldarg_0);
+        pageConstructorIl.Emit(OpCodes.Call, configurePage);
+        pageConstructorIl.Emit(OpCodes.Ret);
+        Type runtimePageType = pageBuilder.CreateType()
+            ?? throw new InvalidOperationException("Could not create the PDNClassic settings page type.");
+        ConstructorInfo runtimePageConstructor = runtimePageType.GetConstructor(new[] { sectionType })
+            ?? throw new MissingMethodException(runtimePageType.FullName, ".ctor(SettingsDialogSection)");
+
+        ConstructorInfo sectionBaseConstructor = FindSectionBaseConstructor(sectionType, out Type appSettingsType, out Type iconType);
+        MethodInfo onCreateUi = sectionType.GetMethod(
+            "OnCreateUI",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            ?? throw new MissingMethodException(sectionType.FullName, "OnCreateUI");
+
+        TypeBuilder sectionBuilder = moduleBuilder.DefineType(
+            "PDNClassic.Settings.UI.PDNClassicSettingsSection",
+            TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.NotPublic,
+            sectionType);
+        ConstructorBuilder sectionConstructor = sectionBuilder.DefineConstructor(
+            MethodAttributes.Public,
+            CallingConventions.Standard,
+            new[] { appSettingsType, iconType });
+        ILGenerator sectionConstructorIl = sectionConstructor.GetILGenerator();
+        sectionConstructorIl.Emit(OpCodes.Ldarg_0);
+        sectionConstructorIl.Emit(OpCodes.Ldarg_1);
+        sectionConstructorIl.Emit(OpCodes.Ldstr, "PDNClassic");
+        sectionConstructorIl.Emit(OpCodes.Ldarg_2);
+        sectionConstructorIl.Emit(OpCodes.Call, sectionBaseConstructor);
+        sectionConstructorIl.Emit(OpCodes.Ret);
+
+        MethodBuilder createUi = sectionBuilder.DefineMethod(
+            onCreateUi.Name,
+            MethodAttributes.Family | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            pageType,
+            Type.EmptyTypes);
+        ILGenerator createUiIl = createUi.GetILGenerator();
+        createUiIl.Emit(OpCodes.Ldarg_0);
+        createUiIl.Emit(OpCodes.Newobj, runtimePageConstructor);
+        createUiIl.Emit(OpCodes.Ret);
+        sectionBuilder.DefineMethodOverride(createUi, onCreateUi);
+
+        Type runtimeSectionType = sectionBuilder.CreateType()
+            ?? throw new InvalidOperationException("Could not create the PDNClassic settings section type.");
+        return runtimeSectionType.GetConstructor(new[] { appSettingsType, iconType })
+            ?? throw new MissingMethodException(runtimeSectionType.FullName, ".ctor(AppSettings, UIImageResource)");
+    }
+
+    private static Type DefineIgnoresAccessChecksAttribute(ModuleBuilder moduleBuilder)
+    {
+        TypeBuilder attributeBuilder = moduleBuilder.DefineType(
+            "System.Runtime.CompilerServices.IgnoresAccessChecksToAttribute",
+            TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.NotPublic,
+            typeof(Attribute));
+        ConstructorInfo attributeBaseConstructor = typeof(Attribute).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            Type.EmptyTypes,
+            modifiers: null)
+            ?? throw new MissingMethodException(typeof(Attribute).FullName, ".ctor");
+        ConstructorBuilder constructor = attributeBuilder.DefineConstructor(
+            MethodAttributes.Public,
+            CallingConventions.Standard,
+            new[] { typeof(string) });
+        ILGenerator il = constructor.GetILGenerator();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, attributeBaseConstructor);
+        il.Emit(OpCodes.Ret);
+        return attributeBuilder.CreateType()
+            ?? throw new InvalidOperationException("Could not create IgnoresAccessChecksToAttribute.");
+    }
+
+    private static ConstructorInfo FindSectionBaseConstructor(Type sectionType, out Type appSettingsType, out Type iconType)
+    {
+        foreach (ConstructorInfo constructor in sectionType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            ParameterInfo[] parameters = constructor.GetParameters();
+            if (parameters.Length == 3 && parameters[1].ParameterType == typeof(string))
+            {
+                appSettingsType = parameters[0].ParameterType;
+                iconType = parameters[2].ParameterType;
+                return constructor;
+            }
+        }
+
+        throw new MissingMethodException(sectionType.FullName, ".ctor(AppSettings, string, UIImageResource)");
+    }
+
+    private static void SettingsDialogConstructorPostfix(object __instance)
+    {
+        if (runtimeSectionConstructor == null ||
+            appSettingsField == null ||
+            settingsSectionsField == null ||
+            settingsPagesField == null ||
+            sectionsListBoxField == null)
+        {
+            throw new InvalidOperationException("PDNClassic settings reflection state was not initialized.");
+        }
+
+        Array sections = (Array)(settingsSectionsField.GetValue(__instance)
+            ?? throw new InvalidOperationException("SettingsDialog.settingsSections is null."));
+        Array pages = (Array)(settingsPagesField.GetValue(__instance)
+            ?? throw new InvalidOperationException("SettingsDialog.settingsPages is null."));
+        object appSettings = appSettingsField.GetValue(__instance)
+            ?? throw new InvalidOperationException("SettingsDialog.appSettings is null.");
+        object icon = sections.GetValue(0)?.GetType().BaseType?.GetProperty(
+            "IconResource",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(sections.GetValue(0)!)
+            ?? throw new InvalidOperationException("Could not obtain a settings section icon.");
+        object section = runtimeSectionConstructor.Invoke(new[] { appSettings, icon });
+
+        Array newSections = Array.CreateInstance(sections.GetType().GetElementType()!, sections.Length + 1);
+        Array.Copy(sections, newSections, sections.Length);
+        newSections.SetValue(section, sections.Length);
+        settingsSectionsField.SetValue(__instance, newSections);
+
+        Array newPages = Array.CreateInstance(pages.GetType().GetElementType()!, pages.Length + 1);
+        Array.Copy(pages, newPages, pages.Length);
+        settingsPagesField.SetValue(__instance, newPages);
+
+        if (sectionsListBoxField.GetValue(__instance) is not ListBox sectionsListBox)
+        {
+            throw new InvalidOperationException("SettingsDialog.sectionsListBox is not a ListBox.");
+        }
+        sectionsListBox.Items.Add(section);
+        dialogStates.Add(__instance, new DialogState(ReadAeroGlassEnabled()));
+    }
+
+    private static Type FindLoadedType(string fullName)
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type? type = assembly.GetType(fullName, throwOnError: false, ignoreCase: false);
+            if (type != null)
+            {
+                return type;
+            }
+        }
+
+        throw new TypeLoadException(fullName);
+    }
+
+    private static void ConfigurePage(object page)
+    {
+        if (page is not Control pageControl)
+        {
+            throw new InvalidOperationException("The PDNClassic settings page is not a Control.");
+        }
+
+        Type checkBoxType = FindLoadedType("PaintDotNet.Controls.PdnCheckBox");
+        object checkBoxObject = Activator.CreateInstance(checkBoxType, nonPublic: true)
+            ?? throw new InvalidOperationException("Could not create PdnCheckBox.");
+        if (checkBoxObject is not Control checkBox)
+        {
+            throw new InvalidOperationException("PdnCheckBox is not a Control.");
+        }
+
+        PropertyInfo isCheckedProperty = checkBoxType.GetProperty("IsChecked", BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(checkBoxType.FullName, "IsChecked");
+        EventInfo isCheckedChangedEvent = checkBoxType.GetEvent("IsCheckedChanged", BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(checkBoxType.FullName, "IsCheckedChanged");
+        checkBox.Name = "enableAeroGlassCheckBox";
+        checkBox.Text = "Enable Aero glass effect";
+        checkBox.AutoSize = true;
+        checkBox.Location = new Point(0, UIScaleFactor.Current.ConvertDipsToPixelsInt(4));
+        isCheckedProperty.SetValue(checkBoxObject, ReadAeroGlassEnabled());
+        isCheckedChangedEvent.AddEventHandler(checkBoxObject, new EventHandler(OnAeroGlassCheckBoxChanged));
+        pageControl.Controls.Add(checkBox);
+    }
+
+    private static void OnAeroGlassCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty("IsChecked", BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? true);
+        WriteAeroGlassEnabled(enabled);
+    }
+
+    private static void SettingsDialogOnClosedPostfix(object __instance)
+    {
+        if (!dialogStates.TryGetValue(__instance, out DialogState? state))
+        {
+            return;
+        }
+
+        bool currentValue = ReadAeroGlassEnabled();
+        if (currentValue == state.InitialValue || currentValue == enabledAtStartup)
+        {
+            return;
+        }
+
+        MessageBox.Show(
+            "Restart Paint.NET for the new settings to take effect.",
+            "PDNClassic",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private static bool ReadAeroGlassEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(AeroGlassValueName) is int value ? value != 0 : true;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static void WriteAeroGlassEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(AeroGlassValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
+    }
+
+    private sealed class DialogState
+    {
+        internal DialogState(bool initialValue)
+        {
+            InitialValue = initialValue;
+        }
+
+        internal bool InitialValue { get; }
+    }
+}
