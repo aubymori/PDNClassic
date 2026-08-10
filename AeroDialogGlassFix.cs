@@ -14,6 +14,7 @@ internal static class AeroDialogGlassFix
     private const string EffectConfigFormTypeName = "PaintDotNet.Effects.EffectConfigForm";
     private const string SettingsDialogTypeName = "PaintDotNet.Settings.UI.SettingsDialog";
     private const string ImageSizeDialogTypeName = "PaintDotNet.Dialogs.ImageSizeDialog";
+    private const string SaveConfigDialogTypeName = "PaintDotNet.Dialogs.SaveConfigDialog";
     private const string GdiBufferedAnimationControlTypeName =
         "PaintDotNet.Gdi.GdiBufferedAnimationControl";
     private sealed class ParentPaintInvoker : Control
@@ -30,6 +31,7 @@ internal static class AeroDialogGlassFix
     private static bool effectConfigFormPatched;
     private static bool settingsDialogPatched;
     private static bool imageSizeDialogPatched;
+    private static bool saveConfigDialogPatched;
     private static bool gdiBufferedAnimationControlPatched;
     private static PropertyInfo? isGlassDesiredProperty;
     private static PropertyInfo? glassInsetProperty;
@@ -157,6 +159,28 @@ internal static class AeroDialogGlassFix
                 imageSizeDialogPatched = true;
             }
 
+            Type? saveConfigDialogType = assembly.GetType(
+                SaveConfigDialogTypeName,
+                throwOnError: false,
+                ignoreCase: false);
+            if (saveConfigDialogType != null && !saveConfigDialogPatched)
+            {
+                ConstructorInfo constructor = saveConfigDialogType
+                    .GetConstructors(
+                        BindingFlags.Instance |
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic)
+                    .SingleOrDefault()
+                    ?? throw new MissingMethodException(
+                        saveConfigDialogType.FullName,
+                        ".ctor(Document, Surface)");
+                harmony.Patch(
+                    constructor,
+                    postfix: new HarmonyMethod(
+                        GetPatchMethod(nameof(SaveConfigConstructorPostfix))));
+                saveConfigDialogPatched = true;
+            }
+
             Type? animationControlType = assembly.GetType(
                 GdiBufferedAnimationControlTypeName,
                 throwOnError: false,
@@ -249,6 +273,12 @@ internal static class AeroDialogGlassFix
         graphics.Clear(Color.Transparent);
         graphics.TranslateTransform(-control.Left, -control.Top);
         (parentPaintInvoker ??= new ParentPaintInvoker()).InvokeParentPaint(control.Parent, paintEventArgs);
+    }
+
+    private static void SaveConfigConstructorPostfix(object __instance)
+    {
+        isGlassDesiredProperty?.SetValue(__instance, true);
+        autoHandleGlassRelatedOptimizationsProperty?.SetValue(__instance, true);
     }
 
     private static void OnShownPrefix(object __instance)
