@@ -29,7 +29,6 @@ internal static class AeroThemeFix
     private const int SmCySizeFrame = 33;
     private const int SmCxPaddedBorder = 92;
 
-    private static readonly object sync = new();
     private static bool patched;
     private static FieldInfo? documentStripField;
     private static MethodInfo? findFormMethod;
@@ -46,7 +45,7 @@ internal static class AeroThemeFix
             return;
         }
 
-        lock (sync)
+        lock (typeof(AeroThemeFix))
         {
             if (patched)
             {
@@ -72,6 +71,10 @@ internal static class AeroThemeFix
             MethodInfo glassCaptionDragInsetGetter = glassCaptionDragInsetProperty.GetMethod
                 ?? throw new MissingMethodException(toolBarType.FullName, "get_GlassCaptionDragInset");
             MethodInfo paintBackground = FindPaintBackground(toolBarType);
+            MethodInfo updateTitle = toolBarType.GetMethod(
+                "UpdateTitle",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                ?? throw new MissingMethodException(toolBarType.FullName, "UpdateTitle");
 
             documentStripField = toolBarType.GetField(
                 "documentStrip",
@@ -107,6 +110,10 @@ internal static class AeroThemeFix
                 nameof(GlassInsetPrefix),
                 BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException(typeof(AeroThemeFix).FullName, nameof(GlassInsetPrefix));
+            MethodInfo updateTitlePostfix = typeof(AeroThemeFix).GetMethod(
+                nameof(UpdateTitlePostfix),
+                BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(typeof(AeroThemeFix).FullName, nameof(UpdateTitlePostfix));
 
 
             AeroThemeFix.glassCaptionDragInsetGetter = glassCaptionDragInsetGetter;
@@ -117,6 +124,9 @@ internal static class AeroThemeFix
                 paintBackground,
                 postfix: new HarmonyMethod(postfix),
                 transpiler: new HarmonyMethod(transpiler));
+            harmony.Patch(
+                updateTitle,
+                postfix: new HarmonyMethod(updateTitlePostfix));
             patched = true;
         }
     }
@@ -244,6 +254,14 @@ internal static class AeroThemeFix
         return conditionalDraw;
     }
 
+    private static void UpdateTitlePostfix(object __instance)
+    {
+        if (ShouldUseLegacyAero() && __instance is System.Windows.Forms.Control toolBar)
+        {
+            toolBar.Update();
+        }
+    }
+
     private static bool ShouldUseLegacyAero()
     {
         if (!StatusBarFix.IsAeroTheme())
@@ -283,6 +301,7 @@ internal static class AeroThemeFix
         _ = DrawThemedCaptionText(hwnd, g, "  " + title + "  ", textBounds, isActive);
     }
 
+
     private static bool DrawThemedCaptionText(
         nint hwnd,
         Graphics graphics,
@@ -314,6 +333,8 @@ internal static class AeroThemeFix
                 {
                     return false;
                 }
+
+                _ = BufferedPaintClear(paintBuffer, nint.Zero);
 
                 nint hfont = captionFont.ToHfont();
                 nint oldFont = SelectObject(bufferHdc, hfont);
@@ -466,6 +487,9 @@ internal static class AeroThemeFix
 
     [DllImport("uxtheme.dll")]
     private static extern int EndBufferedPaint(nint paintBuffer, [MarshalAs(UnmanagedType.Bool)] bool updateTarget);
+
+    [DllImport("uxtheme.dll")]
+    private static extern int BufferedPaintClear(nint paintBuffer, nint rect);
 
     [DllImport("user32.dll")]
     private static extern nint GetActiveWindow();
