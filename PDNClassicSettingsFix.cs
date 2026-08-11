@@ -18,6 +18,8 @@ internal static class PDNClassicSettingsFix
     private const string MetroCloseButtonsValueName = "UseMetroCloseButtons";
     private const string OldToolWindowPositioningValueName = "UseOldToolWindowPositioning";
     private const string GdiClassicFontRenderingValueName = "UseGdiClassicFontRendering";
+    private const string RoundedMenuBarValueName = "UseRoundedMenuBar";
+    private const string LegacyControlStylesValueName = "UseLegacyControlStyles";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
@@ -31,6 +33,10 @@ internal static class PDNClassicSettingsFix
         ReadOldToolWindowPositioningEnabled();
     private static readonly bool gdiClassicFontRenderingEnabledAtStartup =
         ReadGdiClassicFontRenderingEnabled();
+    private static readonly bool roundedMenuBarEnabledAtStartup =
+        ReadRoundedMenuBarEnabled();
+    private static readonly bool legacyControlStylesEnabledAtStartup =
+        ReadLegacyControlStylesEnabled();
     private static bool patched;
     private static ConstructorInfo? runtimeSectionConstructor;
     private static FieldInfo? appSettingsField;
@@ -48,6 +54,10 @@ internal static class PDNClassicSettingsFix
         oldToolWindowPositioningEnabledAtStartup;
     internal static bool GdiClassicFontRenderingEnabledAtStartup =>
         gdiClassicFontRenderingEnabledAtStartup;
+    internal static bool RoundedMenuBarEnabledAtStartup =>
+        roundedMenuBarEnabledAtStartup;
+    internal static bool LegacyControlStylesEnabledAtStartup =>
+        legacyControlStylesEnabledAtStartup;
 
     internal static void Apply(Harmony harmony, Assembly assembly)
     {
@@ -288,6 +298,8 @@ internal static class PDNClassicSettingsFix
                 ReadAeroGlassEnabled(),
                 ReadOldColorsEnabled(),
                 ReadGdiClassicFontRenderingEnabled(),
+                ReadRoundedMenuBarEnabled(),
+                ReadLegacyControlStylesEnabled(),
                 ReadOldIconAccommodationsEnabled(),
                 ReadMetroCloseButtonsEnabled(),
                 ReadOldToolWindowPositioningEnabled()));
@@ -348,6 +360,32 @@ internal static class PDNClassicSettingsFix
         pageControl.Controls.Add(gdiClassicFontRenderingCheckBox);
         gdiClassicFontRenderingCheckBox.PerformLayout();
 
+        Control roundedMenuBarCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useRoundedMenuBarCheckBox",
+            "Use rounded menu bar (Paint.NET v3.5)",
+            ReadRoundedMenuBarEnabled(),
+            OnRoundedMenuBarCheckBoxChanged);
+        int roundedMenuBarTop =
+            gdiClassicFontRenderingCheckBox.Bottom +
+            UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        roundedMenuBarCheckBox.Location = new Point(0, roundedMenuBarTop);
+        pageControl.Controls.Add(roundedMenuBarCheckBox);
+        roundedMenuBarCheckBox.PerformLayout();
+        Control legacyControlStylesCheckBox = CreateCheckBox(
+            checkBoxType,
+            "useLegacyControlStylesCheckBox",
+            "Use Paint.NET v3.5 control styles",
+            ReadLegacyControlStylesEnabled(),
+            OnLegacyControlStylesCheckBoxChanged);
+        int legacyControlStylesTop =
+            roundedMenuBarCheckBox.Bottom +
+            UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
+        legacyControlStylesCheckBox.Location = new Point(0, legacyControlStylesTop);
+        pageControl.Controls.Add(legacyControlStylesCheckBox);
+        legacyControlStylesCheckBox.PerformLayout();
+
+
         Control oldIconAccommodationsCheckBox = CreateCheckBox(
             checkBoxType,
             "useOldIconAccommodationsCheckBox",
@@ -355,7 +393,7 @@ internal static class PDNClassicSettingsFix
             ReadOldIconAccommodationsEnabled(),
             OnOldIconAccommodationsCheckBoxChanged);
         int oldIconAccommodationsTop =
-            gdiClassicFontRenderingCheckBox.Bottom +
+            legacyControlStylesCheckBox.Bottom +
             UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldIconAccommodationsCheckBox.Location = new Point(0, oldIconAccommodationsTop);
         pageControl.Controls.Add(oldIconAccommodationsCheckBox);
@@ -460,6 +498,36 @@ internal static class PDNClassicSettingsFix
         bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
         WriteGdiClassicFontRenderingEnabled(enabled);
     }
+
+    private static void OnRoundedMenuBarCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteRoundedMenuBarEnabled(enabled);
+    }
+    private static void OnLegacyControlStylesCheckBoxChanged(object? sender, EventArgs e)
+    {
+        if (sender == null)
+        {
+            return;
+        }
+
+        PropertyInfo isCheckedProperty = sender.GetType().GetProperty(
+            "IsChecked",
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(sender.GetType().FullName, "IsChecked");
+        bool enabled = (bool)(isCheckedProperty.GetValue(sender) ?? false);
+        WriteLegacyControlStylesEnabled(enabled);
+    }
+
     private static void OnOldIconAccommodationsCheckBoxChanged(object? sender, EventArgs e)
     {
         if (sender == null)
@@ -516,6 +584,8 @@ internal static class PDNClassicSettingsFix
         bool currentAeroValue = ReadAeroGlassEnabled();
         bool currentOldColorsValue = ReadOldColorsEnabled();
         bool currentGdiClassicFontRenderingValue = ReadGdiClassicFontRenderingEnabled();
+        bool currentRoundedMenuBarValue = ReadRoundedMenuBarEnabled();
+        bool currentLegacyControlStylesValue = ReadLegacyControlStylesEnabled();
         bool currentOldIconAccommodationsValue = ReadOldIconAccommodationsEnabled();
         bool currentMetroCloseButtonsValue = ReadMetroCloseButtonsEnabled();
         bool currentOldToolWindowPositioningValue = ReadOldToolWindowPositioningEnabled();
@@ -528,6 +598,12 @@ internal static class PDNClassicSettingsFix
         bool gdiClassicFontRenderingRequiresRestart =
             currentGdiClassicFontRenderingValue != state.InitialGdiClassicFontRenderingValue &&
             currentGdiClassicFontRenderingValue != gdiClassicFontRenderingEnabledAtStartup;
+        bool roundedMenuBarRequiresRestart =
+            currentRoundedMenuBarValue != state.InitialRoundedMenuBarValue &&
+            currentRoundedMenuBarValue != roundedMenuBarEnabledAtStartup;
+        bool legacyControlStylesRequireRestart =
+            currentLegacyControlStylesValue != state.InitialLegacyControlStylesValue &&
+            currentLegacyControlStylesValue != legacyControlStylesEnabledAtStartup;
         bool oldIconAccommodationsRequireRestart =
             currentOldIconAccommodationsValue != state.InitialOldIconAccommodationsValue &&
             currentOldIconAccommodationsValue != oldIconAccommodationsEnabledAtStartup;
@@ -540,6 +616,8 @@ internal static class PDNClassicSettingsFix
         if (!aeroRequiresRestart &&
             !oldColorsRequireRestart &&
             !gdiClassicFontRenderingRequiresRestart &&
+            !roundedMenuBarRequiresRestart &&
+            !legacyControlStylesRequireRestart &&
             !oldIconAccommodationsRequireRestart &&
             !metroCloseButtonsRequireRestart &&
             !oldToolWindowPositioningRequiresRestart)
@@ -592,6 +670,32 @@ internal static class PDNClassicSettingsFix
             return false;
         }
     }
+
+    private static bool ReadRoundedMenuBarEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(RoundedMenuBarValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    private static bool ReadLegacyControlStylesEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
+            return key?.GetValue(LegacyControlStylesValueName) is int value && value != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool ReadOldIconAccommodationsEnabled()
     {
         try
@@ -655,6 +759,23 @@ internal static class PDNClassicSettingsFix
             enabled ? 1 : 0,
             RegistryValueKind.DWord);
     }
+
+    private static void WriteRoundedMenuBarEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(RoundedMenuBarValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
+    }
+    private static void WriteLegacyControlStylesEnabled(bool enabled)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
+            ?? throw new InvalidOperationException("Could not open the PDNClassic settings registry key.");
+        key.SetValue(
+            LegacyControlStylesValueName,
+            enabled ? 1 : 0,
+            RegistryValueKind.DWord);
+    }
+
     private static void WriteOldIconAccommodationsEnabled(bool enabled)
     {
         using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath, writable: true)
@@ -689,6 +810,8 @@ internal static class PDNClassicSettingsFix
             bool initialAeroValue,
             bool initialOldColorsValue,
             bool initialGdiClassicFontRenderingValue,
+            bool initialRoundedMenuBarValue,
+            bool initialLegacyControlStylesValue,
             bool initialOldIconAccommodationsValue,
             bool initialMetroCloseButtonsValue,
             bool initialOldToolWindowPositioningValue)
@@ -696,6 +819,8 @@ internal static class PDNClassicSettingsFix
             InitialAeroValue = initialAeroValue;
             InitialOldColorsValue = initialOldColorsValue;
             InitialGdiClassicFontRenderingValue = initialGdiClassicFontRenderingValue;
+            InitialRoundedMenuBarValue = initialRoundedMenuBarValue;
+            InitialLegacyControlStylesValue = initialLegacyControlStylesValue;
             InitialOldIconAccommodationsValue = initialOldIconAccommodationsValue;
             InitialMetroCloseButtonsValue = initialMetroCloseButtonsValue;
             InitialOldToolWindowPositioningValue = initialOldToolWindowPositioningValue;
@@ -706,6 +831,10 @@ internal static class PDNClassicSettingsFix
         internal bool InitialOldColorsValue { get; }
 
         internal bool InitialGdiClassicFontRenderingValue { get; }
+
+        internal bool InitialRoundedMenuBarValue { get; }
+        internal bool InitialLegacyControlStylesValue { get; }
+
 
         internal bool InitialOldIconAccommodationsValue { get; }
 
