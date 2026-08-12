@@ -409,7 +409,6 @@ internal static class PDNClassicSettingsFix
             oldIconAccommodationsCheckBox.Bottom +
             UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         metroCloseButtonsCheckBox.Location = new Point(0, metroCloseButtonsTop);
-        metroCloseButtonsCheckBox.Enabled = StatusBarFix.IsAeroTheme();
         pageControl.Controls.Add(metroCloseButtonsCheckBox);
 
         Control oldToolWindowPositioningCheckBox = CreateCheckBox(
