@@ -14,6 +14,7 @@ internal static class LegacyControlStylesFix
     private const string ToolStripRendererTypeName = "PaintDotNet.VisualStyling.PdnToolStripRenderer";
     private const string ToleranceSliderTypeName = "PaintDotNet.Controls.ToleranceSliderControl";
     private const string SliderHostTypeName = "PaintDotNet.Controls.ToolConfigUI.SliderControl";
+    private const string ToolBarTypeName = "PaintDotNet.Controls.PdnToolBar";
 
     private static readonly object sync = new();
     private static bool gdiPatched;
@@ -21,9 +22,11 @@ internal static class LegacyControlStylesFix
     private static bool imageListControlsPatched;
     private static bool toolStripRendererPatched;
     private static bool toleranceSliderPatched;
+    private static bool toolBarMenuTextPatched;
     private static Func<object, Color, Pen>? getPen;
     private static Action<object, double, double, double, double, Color>? fillD2dRectangle;
     private static MethodInfo? drawRoundedInsetMethod;
+    private static Action<object, object>? renderBaseToolStripItemText;
 
     [ThreadStatic]
     private static Point[]? outlinePoints;
@@ -75,6 +78,19 @@ internal static class LegacyControlStylesFix
                 {
                     PatchToolStripRenderer(harmony, toolStripRendererType);
                     toolStripRendererPatched = true;
+                }
+            }
+
+            if (!toolBarMenuTextPatched)
+            {
+                Type? toolBarType = assembly.GetType(
+                    ToolBarTypeName,
+                    throwOnError: false,
+                    ignoreCase: false);
+                if (toolBarType != null)
+                {
+                    PatchToolBarMenuText(harmony, toolBarType);
+                    toolBarMenuTextPatched = true;
                 }
             }
 
@@ -533,6 +549,98 @@ internal static class LegacyControlStylesFix
                 typeof(LegacyControlStylesFix).FullName,
                 nameof(DrawLegacyAeroSeparatorPrefix));
         harmony.Patch(drawAeroSeparator, prefix: new HarmonyMethod(prefix));
+    }
+
+    private static void PatchToolBarMenuText(Harmony harmony, Type toolBarType)
+    {
+        Type rendererType = toolBarType.GetNestedType(
+            "PdnToolBarStripRenderer",
+            BindingFlags.NonPublic)
+            ?? throw new MissingMemberException(
+                toolBarType.FullName,
+                "PdnToolBarStripRenderer");
+        MethodInfo onRenderItemText = GetRequiredDeclaredMethod(
+            rendererType,
+            "OnRenderItemText",
+            parameterCount: 1);
+        Type baseRendererType = rendererType.BaseType
+            ?? throw new MissingMemberException(rendererType.FullName, "BaseType");
+        Type eventArgsType = onRenderItemText.GetParameters()[0].ParameterType;
+        MethodInfo baseOnRenderItemText = baseRendererType.GetMethod(
+            "OnRenderItemText",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: new[] { eventArgsType },
+            modifiers: null)
+            ?? throw new MissingMethodException(
+                baseRendererType.FullName,
+                "OnRenderItemText(ToolStripItemTextRenderEventArgs)");
+        renderBaseToolStripItemText = CreateBaseMethodInvoker(
+            baseOnRenderItemText,
+            eventArgsType);
+
+        MethodInfo prefix = typeof(LegacyControlStylesFix).GetMethod(
+            nameof(RenderToolBarMenuTextWithBasePrefix),
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(
+                typeof(LegacyControlStylesFix).FullName,
+                nameof(RenderToolBarMenuTextWithBasePrefix));
+        harmony.Patch(
+            onRenderItemText,
+            prefix: new HarmonyMethod(prefix));
+    }
+
+    private static Action<object, object> CreateBaseMethodInvoker(
+        MethodInfo baseMethod,
+        Type argumentType)
+    {
+        DynamicMethod invoker = new(
+            "PDNClassic_RenderBaseToolStripItemText",
+            typeof(void),
+            new[] { typeof(object), typeof(object) },
+            typeof(LegacyControlStylesFix),
+            skipVisibility: true);
+        ILGenerator il = invoker.GetILGenerator();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Castclass, baseMethod.DeclaringType!);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Castclass, argumentType);
+        il.Emit(OpCodes.Call, baseMethod);
+        il.Emit(OpCodes.Ret);
+        return (Action<object, object>)invoker.CreateDelegate(
+            typeof(Action<object, object>));
+    }
+
+    private static bool RenderToolBarMenuTextWithBasePrefix(
+        object __instance,
+        System.Windows.Forms.ToolStripItemTextRenderEventArgs __0)
+    {
+        System.Windows.Forms.ToolStripItem item = __0.Item;
+        if (!IsPdnMenuItem(item.GetType()) ||
+            item.IsOnDropDown ||
+            __0.TextDirection != System.Windows.Forms.ToolStripTextDirection.Horizontal)
+        {
+            return true;
+        }
+
+        Action<object, object> render = renderBaseToolStripItemText
+            ?? throw new InvalidOperationException(
+                "The native ToolStrip text renderer has not been initialized.");
+        render(__instance, __0);
+        return false;
+    }
+
+    private static bool IsPdnMenuItem(Type type)
+    {
+        for (Type? current = type; current != null; current = current.BaseType)
+        {
+            if (current.FullName == "PaintDotNet.Menus.PdnMenuItem")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool DrawLegacyAeroSeparatorPrefix(
