@@ -709,11 +709,11 @@ internal static class PDNClassicSettingsFix
         try
         {
             using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
-            return key?.GetValue(OldColorsValueName) is int value && value != 0;
+            return key?.GetValue(OldColorsValueName) is int value ? value != 0 : true;
         }
         catch
         {
-            return false;
+            return true;
         }
     }
 
@@ -760,11 +760,11 @@ internal static class PDNClassicSettingsFix
         try
         {
             using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
-            return key?.GetValue(OldIconAccommodationsValueName) is int value && value != 0;
+            return key?.GetValue(OldIconAccommodationsValueName) is int value ? value != 0 : true;
         }
         catch
         {
-            return false;
+            return true;
         }
     }
     private static bool ReadMetroCloseButtonsEnabled()
@@ -785,11 +785,11 @@ internal static class PDNClassicSettingsFix
         try
         {
             using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
-            return key?.GetValue(OldToolWindowPositioningValueName) is int value && value != 0;
+            return key?.GetValue(OldToolWindowPositioningValueName) is int value ? value != 0 : true;
         }
         catch
         {
-            return false;
+            return true;
         }
     }
 
