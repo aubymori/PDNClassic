@@ -6,7 +6,7 @@
 // @author          aubymori
 // @github          https://github.com/aubymori
 // @include         paintdotnet.exe
-// @license         GPL-3.0
+// @license         BSD-3-Clause
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
