@@ -3,6 +3,7 @@ using PaintDotNet;
 using Microsoft.Win32;
 using System;
 using System.Drawing;
+using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
@@ -20,6 +21,7 @@ internal static class PDNClassicSettingsFix
     private const string GdiClassicFontRenderingValueName = "UseGdiClassicFontRendering";
     private const string RoundedMenuBarValueName = "UseRoundedMenuBar";
     private const string LegacyControlStylesValueName = "UseLegacyControlStyles";
+    private const string RepositoryUrl = "https://github.com/aubymori/PDNClassic";
 
     private static readonly object sync = new();
     private static readonly ConditionalWeakTable<object, DialogState> dialogStates = new();
@@ -422,6 +424,64 @@ internal static class PDNClassicSettingsFix
             UIScaleFactor.Current.ConvertDipsToPixelsInt(10);
         oldToolWindowPositioningCheckBox.Location = new Point(0, oldToolWindowPositioningTop);
         pageControl.Controls.Add(oldToolWindowPositioningCheckBox);
+        AddVersionFooter(pageControl, oldToolWindowPositioningCheckBox);
+    }
+
+
+    private static void AddVersionFooter(
+        Control pageControl,
+        Control precedingControl)
+    {
+        Type labelType = FindLoadedType("PaintDotNet.Controls.PdnLabel");
+        Type linkLabelType = FindLoadedType("PaintDotNet.Controls.PdnLinkLabel");
+        if (Activator.CreateInstance(labelType, nonPublic: true) is not System.Windows.Forms.Label versionLabel)
+        {
+            throw new InvalidOperationException("Could not create PdnLabel.");
+        }
+
+        if (Activator.CreateInstance(linkLabelType, nonPublic: true) is not LinkLabel repositoryLink)
+        {
+            throw new InvalidOperationException("Could not create PdnLinkLabel.");
+        }
+
+        Version version = typeof(PDNClassicSettingsFix).Assembly.GetName().Version
+            ?? throw new InvalidOperationException("PDNClassic has no assembly version.");
+        versionLabel.Name = "pdnClassicVersionLabel";
+        versionLabel.Text =
+            $"PDNClassic v{version.Major}.{version.Minor}.{version.Build}";
+        versionLabel.AutoSize = true;
+        versionLabel.Location = new Point(
+            0,
+            precedingControl.Bottom +
+                UIScaleFactor.Current.ConvertDipsToPixelsInt(20));
+        pageControl.Controls.Add(versionLabel);
+        versionLabel.PerformLayout();
+
+        repositoryLink.Name = "pdnClassicRepositoryLink";
+        repositoryLink.Text = RepositoryUrl;
+        repositoryLink.LinkArea = new LinkArea(0, RepositoryUrl.Length);
+        repositoryLink.ForeColor = SystemColors.HotTrack;
+        repositoryLink.LinkColor = SystemColors.HotTrack;
+        repositoryLink.ActiveLinkColor = SystemColors.Highlight;
+        repositoryLink.VisitedLinkColor = SystemColors.HotTrack;
+        repositoryLink.AutoSize = true;
+        repositoryLink.Location = new Point(
+            0,
+            versionLabel.Bottom +
+                UIScaleFactor.Current.ConvertDipsToPixelsInt(2));
+        repositoryLink.LinkClicked += OnRepositoryLinkClicked;
+        pageControl.Controls.Add(repositoryLink);
+        repositoryLink.PerformLayout();
+    }
+
+    private static void OnRepositoryLinkClicked(
+        object? sender,
+        LinkLabelLinkClickedEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo(RepositoryUrl)
+        {
+            UseShellExecute = true
+        });
     }
 
     private static Control CreateCheckBox(
